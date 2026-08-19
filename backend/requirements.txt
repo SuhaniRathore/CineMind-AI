@@ -14,6 +14,14 @@ sqlalchemy==2.0.36
 psycopg[binary]==3.2.3
 alembic==1.14.0
 
+# Authentication (Milestone 5)
+# PyJWT: JWT token creation and verification (HS256).
+# bcrypt: password hashing — used directly (no passlib wrapper).
+# email-validator: required by pydantic EmailStr (pydantic[email] extra).
+PyJWT==2.10.1
+bcrypt==4.3.0
+email-validator==2.3.0
+
 # Testing
 pytest==8.3.4
 pytest-mock==3.14.0
