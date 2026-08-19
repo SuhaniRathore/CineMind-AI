@@ -39,8 +39,12 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
-    # External services (placeholder only — not used until later milestones)
+    # External services — TMDB integration active from Milestone 4.
+    # API key loaded exclusively from env var; never hardcoded (DEVELOPMENT_RULES.md rule 13).
     tmdb_api_key: str = ""
+    tmdb_base_url: str = "https://api.themoviedb.org/3"
+    # Number of TMDB popular-movie pages fetched on each sync (each page ≈ 20 movies)
+    tmdb_sync_pages: int = 5
 
 
 @lru_cache

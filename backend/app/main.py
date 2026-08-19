@@ -1,8 +1,8 @@
 """
 CineMind AI — FastAPI application entrypoint.
 
-Milestone 1 scope: app instance, CORS, and a single health-check route.
-No auth, database models, TMDB integration, or ML/NLP logic is wired in yet
+Milestone 4 scope: TMDB client wired in; movies router registered under
+/api/v1/movies.  Auth, ML/NLP, and frontend features are not wired in yet
 (see ROADMAP.md for the milestone plan).
 """
 
@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import health
+from app.api.routes import movies
 from app.core.config import get_settings
 
 
@@ -32,6 +33,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
+    app.include_router(movies.router, prefix=settings.api_v1_prefix)
 
     return app
 
