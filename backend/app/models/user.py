@@ -74,3 +74,8 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    recommendation_results: Mapped[list["RecommendationResult"]] = relationship(  # noqa: F821
+        "RecommendationResult",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )

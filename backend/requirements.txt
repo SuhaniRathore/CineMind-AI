@@ -22,6 +22,9 @@ PyJWT==2.10.1
 bcrypt==4.3.0
 email-validator==2.3.0
 
+# Machine Learning / Recommendations (Milestone 8)
+scikit-learn==1.6.1
+
 # Testing
 pytest==8.3.4
 pytest-mock==3.14.0

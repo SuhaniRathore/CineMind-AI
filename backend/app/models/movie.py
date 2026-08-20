@@ -116,3 +116,8 @@ class Movie(Base):
         back_populates="movie",
         cascade="all, delete-orphan",
     )
+    recommendation_results: Mapped[list["RecommendationResult"]] = relationship(  # noqa: F821
+        "RecommendationResult",
+        back_populates="movie",
+        cascade="all, delete-orphan",
+    )

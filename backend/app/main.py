@@ -16,6 +16,7 @@ from app.api.routes import users
 from app.api.routes import ratings
 from app.api.routes import reviews
 from app.api.routes import watchlist
+from app.api.routes import recommendations
 from app.core.config import get_settings
 
 
@@ -44,6 +45,7 @@ def create_app() -> FastAPI:
     app.include_router(ratings.router, prefix=settings.api_v1_prefix)
     app.include_router(reviews.router, prefix=settings.api_v1_prefix)
     app.include_router(watchlist.router, prefix=settings.api_v1_prefix)
+    app.include_router(recommendations.router, prefix=settings.api_v1_prefix)
 
     return app
 
