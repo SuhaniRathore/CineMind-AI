@@ -106,3 +106,13 @@ class Movie(Base):
         back_populates="movie",
         cascade="all, delete-orphan",
     )
+    reviews: Mapped[list["Review"]] = relationship(  # noqa: F821
+        "Review",
+        back_populates="movie",
+        cascade="all, delete-orphan",
+    )
+    watchlist: Mapped[list["WatchlistItem"]] = relationship(  # noqa: F821
+        "WatchlistItem",
+        back_populates="movie",
+        cascade="all, delete-orphan",
+    )

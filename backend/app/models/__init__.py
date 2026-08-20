@@ -15,4 +15,7 @@ from app.models.movie import Movie, movie_genres  # noqa: F401
 from app.models.user import User  # noqa: F401
 from app.models.rating import Rating  # noqa: F401
 
-__all__ = ["Genre", "Movie", "movie_genres", "User", "Rating"]
+from app.models.review import Review  # noqa: F401
+from app.models.watchlist import WatchlistItem  # noqa: F401
+
+__all__ = ["Genre", "Movie", "movie_genres", "User", "Rating", "Review", "WatchlistItem"]

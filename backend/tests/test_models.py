@@ -185,9 +185,9 @@ class TestMovieGenresTable:
 # ---------------------------------------------------------------------------
 
 class TestMetadataTables:
-    def test_exactly_four_tables_registered(self):
+    def test_exactly_expected_tables_registered(self):
         tables = set(Base.metadata.tables.keys())
-        assert tables == {"users", "movies", "genres", "movie_genres", "ratings"}
+        assert tables == {"users", "movies", "genres", "movie_genres", "ratings", "reviews", "watchlist"}
 
 
 # ---------------------------------------------------------------------------

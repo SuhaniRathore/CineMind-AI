@@ -64,3 +64,13 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    reviews: Mapped[list["Review"]] = relationship(  # noqa: F821
+        "Review",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    watchlist: Mapped[list["WatchlistItem"]] = relationship(  # noqa: F821
+        "WatchlistItem",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
