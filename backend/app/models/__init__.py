@@ -13,5 +13,6 @@ Import order: Base first (via app.db.database), then models with no FKs
 from app.models.genre import Genre  # noqa: F401 — must be before Movie
 from app.models.movie import Movie, movie_genres  # noqa: F401
 from app.models.user import User  # noqa: F401
+from app.models.rating import Rating  # noqa: F401
 
-__all__ = ["Genre", "Movie", "movie_genres", "User"]
+__all__ = ["Genre", "Movie", "movie_genres", "User", "Rating"]

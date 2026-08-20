@@ -99,3 +99,10 @@ class Movie(Base):
 
     def __repr__(self) -> str:
         return f"<Movie id={self.id} tmdb_id={self.tmdb_id} title={self.title!r}>"
+
+    # Relationships
+    ratings: Mapped[list["Rating"]] = relationship(  # noqa: F821
+        "Rating",
+        back_populates="movie",
+        cascade="all, delete-orphan",
+    )

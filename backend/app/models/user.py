@@ -24,7 +24,7 @@ Relationships to child tables are added at the milestone that creates each:
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, String, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
 
@@ -57,3 +57,10 @@ class User(Base):
 
     def __repr__(self) -> str:
         return f"<User id={self.id} email={self.email!r}>"
+
+    # Relationships
+    ratings: Mapped[list["Rating"]] = relationship(  # noqa: F821
+        "Rating",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
