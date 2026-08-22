@@ -9,6 +9,7 @@ Schemas follow the same conventions as app/schemas/movie.py:
 
 Schemas defined here:
   UserCreate   — body for POST /auth/register
+  LoginRequest — body for POST /auth/login
   UserOut      — response for register, login (user portion), GET /users/me
   Token        — response for POST /auth/login  (access_token + token_type)
   TokenData    — internal: the claims decoded from a JWT (not returned to client)
@@ -27,6 +28,13 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, description="Plain-text password (min 8 chars)")
     display_name: str = Field(min_length=1, max_length=100)
+
+
+class LoginRequest(BaseModel):
+    """Request body for POST /auth/login."""
+
+    email: EmailStr
+    password: str
 
 
 class UserOut(BaseModel):

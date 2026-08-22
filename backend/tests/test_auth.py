@@ -190,9 +190,9 @@ class TestSecurity:
     def test_decode_tampered_token_raises(self):
         settings = _test_settings()
         token = create_access_token(1, settings)
-        # Flip a character in the signature segment
+        # Flip the first character in the signature segment to guarantee a data bit change
         parts = token.split(".")
-        parts[2] = parts[2][:-1] + ("A" if parts[2][-1] != "A" else "B")
+        parts[2] = ("A" if parts[2][0] != "A" else "B") + parts[2][1:]
         tampered = ".".join(parts)
         with pytest.raises(jwt.PyJWTError):
             decode_access_token(tampered, settings)
@@ -262,7 +262,7 @@ class TestLogin:
     def _login(self, client: TestClient, email: str, password: str) -> dict:
         return client.post(
             "/api/v1/auth/login",
-            json={"email": email, "password": password, "display_name": "ignored"},
+            json={"email": email, "password": password},
         )
 
     def test_login_success_returns_200(self, client: TestClient):
@@ -309,6 +309,16 @@ class TestLogin:
         assert "password" not in body
         assert "hashed_password" not in str(body)
 
+    def test_login_missing_fields_returns_422(self, client: TestClient):
+        """Verify the dedicated login schema rejects missing email or password."""
+        # Missing password
+        resp1 = client.post("/api/v1/auth/login", json={"email": "alice@example.com"})
+        assert resp1.status_code == 422
+        
+        # Missing email
+        resp2 = client.post("/api/v1/auth/login", json={"password": "password123"})
+        assert resp2.status_code == 422
+
 
 # ===========================================================================
 # TestGetMe — GET /api/v1/users/me  (protected route)
@@ -321,7 +331,7 @@ class TestGetMe:
         _register(client)
         resp = client.post(
             "/api/v1/auth/login",
-            json={**_VALID_PAYLOAD},
+            json={"email": _VALID_PAYLOAD["email"], "password": _VALID_PAYLOAD["password"]},
         )
         token = resp.json()["access_token"]
         return {"Authorization": f"Bearer {token}"}

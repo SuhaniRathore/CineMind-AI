@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.core.security import create_access_token
 from app.db.database import get_db
-from app.schemas.user import Token, UserCreate, UserOut
+from app.schemas.user import LoginRequest, Token, UserCreate, UserOut
 from app.services import auth_service
 
 logger = logging.getLogger(__name__)
@@ -72,7 +72,7 @@ def register(
     summary="Login and receive a JWT access token",
 )
 def login(
-    body: UserCreate,
+    body: LoginRequest,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Token:
@@ -85,10 +85,6 @@ def login(
     - **user**: the authenticated user's public profile.
 
     Returns HTTP 401 if the credentials are invalid.
-
-    Note: the request body is UserCreate (email + password) — the
-    display_name field is present in the schema but ignored on login.
-    A dedicated LoginRequest schema is a future polish item (Milestone 10).
     """
     user = auth_service.authenticate_user(
         db,
