@@ -1,6 +1,8 @@
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.movie import MovieOut
+
 
 class WatchlistCreate(BaseModel):
     movie_id: int
@@ -13,6 +15,7 @@ class WatchlistResponse(BaseModel):
     user_id: int
     movie_id: int
     created_at: datetime
+    movie: MovieOut
 
 
 class WatchlistListResponse(BaseModel):

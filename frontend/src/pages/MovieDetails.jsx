@@ -12,6 +12,7 @@ const MovieDetails = () => {
   
   const [userRating, setUserRating] = useState(0);
   const [inWatchlist, setInWatchlist] = useState(false);
+  const [watchlistItemId, setWatchlistItemId] = useState(null);
   
   const [reviews, setReviews] = useState([]);
   const [newReviewTitle, setNewReviewTitle] = useState('');
@@ -38,8 +39,14 @@ const MovieDetails = () => {
         // Fetch watchlist status
         try {
           const wlRes = await api.get('/watchlist');
-          const isOnList = wlRes.data.items.some(item => item.movie.id === parseInt(id));
-          setInWatchlist(isOnList);
+          const foundItem = wlRes.data.items.find(item => item.movie.id === parseInt(id));
+          if (foundItem) {
+            setInWatchlist(true);
+            setWatchlistItemId(foundItem.id);
+          } else {
+            setInWatchlist(false);
+            setWatchlistItemId(null);
+          }
         } catch (e) { /* ignore */ }
 
         // Fetch reviews
@@ -75,12 +82,14 @@ const MovieDetails = () => {
 
   const toggleWatchlist = async () => {
     try {
-      if (inWatchlist) {
-        await api.delete(`/watchlist/${id}`);
+      if (inWatchlist && watchlistItemId) {
+        await api.delete(`/watchlist/${watchlistItemId}`);
         setInWatchlist(false);
+        setWatchlistItemId(null);
       } else {
-        await api.post('/watchlist', { movie_id: parseInt(id) });
+        const res = await api.post('/watchlist', { movie_id: parseInt(id) });
         setInWatchlist(true);
+        setWatchlistItemId(res.data.id);
       }
     } catch (e) {
       console.error("Failed to toggle watchlist", e);

@@ -16,7 +16,7 @@ const Home = () => {
       try {
         let url = '/movies?limit=24';
         if (searchQuery) {
-          url += `&search=${encodeURIComponent(searchQuery)}`;
+          url = `/movies/search?limit=24&q=${encodeURIComponent(searchQuery)}`;
         }
         const response = await api.get(url);
         setMovies(response.data.movies);
