@@ -19,4 +19,15 @@ client.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+// Intercept responses to handle 429 Too Many Requests globally
+client.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response && error.response.status === 429) {
+      error.response.data = { detail: "Too many requests. Please try again later." };
+    }
+    return Promise.reject(error);
+  }
+);
+
 export default client;

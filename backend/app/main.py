@@ -8,8 +8,12 @@ and /api/v1/users.  ML/NLP and frontend features are not wired in yet
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.routes import auth
+from app.core.limiter import limiter
 from app.api.routes import health
 from app.api.routes import movies
 from app.api.routes import users
@@ -37,6 +41,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
 
     app.include_router(health.router)
     app.include_router(movies.router, prefix=settings.api_v1_prefix)

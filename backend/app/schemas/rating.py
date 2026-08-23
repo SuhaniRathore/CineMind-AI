@@ -12,7 +12,7 @@ class RatingBase(BaseModel):
 class RatingCreate(RatingBase):
     """Properties to receive on rating creation."""
 
-    movie_id: int = Field(description="ID of the movie being rated")
+    movie_id: int = Field(gt=0, description="ID of the movie being rated")
 
 
 class RatingUpdate(RatingBase):

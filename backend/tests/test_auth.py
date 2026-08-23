@@ -319,6 +319,10 @@ class TestLogin:
         resp2 = client.post("/api/v1/auth/login", json={"password": "password123"})
         assert resp2.status_code == 422
 
+    def test_login_missing_credentials(self, client: TestClient):
+        resp = client.post("/api/v1/auth/login", json={})
+        assert resp.status_code == 422
+
 
 # ===========================================================================
 # TestGetMe — GET /api/v1/users/me  (protected route)
@@ -394,3 +398,10 @@ class TestGetMe:
         body = resp.json()
         assert "password" not in body
         assert "hashed_password" not in body
+
+    def test_get_me_malformed_auth_header(self, client: TestClient):
+        resp = client.get(
+            "/api/v1/users/me",
+            headers={"Authorization": "Basic not.a.jwt"},
+        )
+        assert resp.status_code == 401

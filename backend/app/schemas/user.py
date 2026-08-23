@@ -34,7 +34,7 @@ class LoginRequest(BaseModel):
     """Request body for POST /auth/login."""
 
     email: EmailStr
-    password: str
+    password: str = Field(min_length=8)
 
 
 class UserOut(BaseModel):

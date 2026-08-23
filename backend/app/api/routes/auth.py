@@ -12,15 +12,16 @@ Architecture rules (ARCHITECTURE.md / DEVELOPMENT_RULES.md rule 9):
     settings are injected via Depends(get_settings).
 """
 
-from __future__ import annotations
+
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.security import create_access_token
+from app.core.limiter import limiter
 from app.db.database import get_db
 from app.schemas.user import LoginRequest, Token, UserCreate, UserOut
 from app.services import auth_service
@@ -71,7 +72,9 @@ def register(
     response_model=Token,
     summary="Login and receive a JWT access token",
 )
+@limiter.limit("5/minute")
 def login(
+    request: Request,
     body: LoginRequest,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
