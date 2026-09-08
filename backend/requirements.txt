@@ -25,6 +25,19 @@ email-validator==2.3.0
 # Machine Learning / Recommendations (Milestone 8)
 scikit-learn==1.6.1
 
+# Data Pipeline & Collaborative Filtering (Milestone 12)
+# pandas: DataFrame-based loading and joining of MovieLens CSV datasets.
+# numpy: matrix operations for the collaborative filtering model.
+# scikit-surprise: SVD/KNN collaborative filtering (built on scipy/numpy).
+#   Chosen for: clean API, well-documented, viva-explainable, no GPU required.
+# joblib: model artifact serialization (save/load trained SVD model to disk).
+# scipy: required by scikit-surprise internally; pinned for reproducibility.
+pandas==2.2.3
+numpy==1.26.4
+scikit-surprise==1.1.4
+joblib==1.4.2
+scipy==1.13.1
+
 # Testing
 pytest==8.3.4
 pytest-mock==3.14.0

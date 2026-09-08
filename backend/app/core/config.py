@@ -46,6 +46,35 @@ class Settings(BaseSettings):
     # Number of TMDB popular-movie pages fetched on each sync (each page ≈ 20 movies)
     tmdb_sync_pages: int = 5
 
+    # ---------------------------------------------------------------------------
+    # Milestone 12 — Data Pipeline & ML Foundation settings
+    # ---------------------------------------------------------------------------
+
+    # Path to the directory where raw dataset files are stored.
+    # In Docker this should be a volume mount (e.g. /app/data).
+    # Locally defaults to a 'data' sibling of the backend package root.
+    data_dir: str = "data"
+
+    # Path to the directory where trained model artifacts (.pkl) are saved.
+    # Subdirectory of data_dir by default; can be overridden independently.
+    models_dir: str = "data/models"
+
+    # Secret token required to call /admin/* endpoints.
+    # Change this in .env — it is a bearer secret, not a JWT.
+    admin_api_secret: str = "changeme-admin-secret"
+
+    # MovieLens dataset variant to download/expect.
+    # Supported: 'ml-latest-small' (recommended) or 'ml-latest'.
+    movielens_variant: str = "ml-latest-small"
+
+    # Minimum number of in-app ratings a user must have before the
+    # collaborative filter is used (below this → content-based only).
+    collab_min_ratings: int = 3
+
+    # Hybrid blend weight for content-based score (0.0–1.0).
+    # collaborative weight = 1.0 - hybrid_content_weight
+    hybrid_content_weight: float = 0.4
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -157,7 +157,7 @@ class TestRecommendations:
         resp = client.get("/api/v1/recommendations", headers=auth_header)
         assert resp.status_code == 200
         data = resp.json()
-        
+
         # Movie A is already rated, should be excluded.
         rec_movie_ids = [r["movie_id"] for r in data["recommendations"]]
         assert seed_movies["A"] not in rec_movie_ids
@@ -165,14 +165,18 @@ class TestRecommendations:
         # Should recommend B and D (they have Action). C (pure Comedy) should be lowest or excluded if 0 similarity.
         # B is pure Action, D is Action/Comedy. B should be higher or equal to D in similarity to A (pure Action).
         assert seed_movies["B"] in rec_movie_ids
-        
-        # Verify persistence
+
+        # Verify persistence and reason_text=None
         from app.db.database import get_db
         generator = client.app.dependency_overrides[get_db]()
         db = next(generator)
         user = db.query(User).filter(User.email == "recuser@example.com").first()
         persisted = db.query(RecommendationResult).filter(RecommendationResult.user_id == user.id).all()
         assert len(persisted) == len(data["recommendations"])
+
+        # Ensure reason_text is None
+        for p in persisted:
+            assert p.reason_text is None
 
         try:
             next(generator)

@@ -3,6 +3,9 @@ SQLAlchemy ORM model for the 'movies' table and the 'movie_genres' join table.
 
 Design decisions (confirmed before implementation):
 - movies is a CACHE of TMDB data — tmdb_id is the natural external key.
+- imdb_id is added at Milestone 12 to bridge our movie cache with the
+  MovieLens dataset via the links.csv mapping file (movieId → imdbId → tmdbId).
+  It is nullable because most rows were synced before this column existed.
 - CASCADE DELETE on movie deletion: when a movie row is deleted, all child
   rows in ratings, reviews, watchlist, watch_history, movie_genres, and
   recommendation_results are automatically removed. This is enforced at the
@@ -61,6 +64,13 @@ class Movie(Base):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     tmdb_id: Mapped[int] = mapped_column(
         Integer, unique=True, index=True, nullable=False
+    )
+    # imdb_id: added at Milestone 12 to enable MovieLens cross-referencing.
+    # Nullable because existing rows were cached before this column existed.
+    # The partial unique index (ix_movies_imdb_id) in the Alembic migration
+    # enforces uniqueness only for non-NULL values.
+    imdb_id: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, index=True
     )
     title: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
     overview: Mapped[str | None] = mapped_column(String, nullable=True)

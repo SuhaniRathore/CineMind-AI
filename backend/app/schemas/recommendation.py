@@ -11,6 +11,9 @@ class RecommendationResponse(BaseModel):
     movie_id: int
     relevance_score: float
     generated_at: datetime
+    # Milestone 12 additions
+    algorithm: str = "content_based"
+    reason_text: str | None = None
     # Optionally include the movie details
     movie: MovieOut | None = None
 

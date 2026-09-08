@@ -118,7 +118,7 @@ class TestMovieModel:
     def test_expected_columns(self):
         cols = {c.name for c in Movie.__table__.columns}
         expected = {
-            "id", "tmdb_id", "title", "overview", "release_date",
+            "id", "tmdb_id", "imdb_id", "title", "overview", "release_date",
             "runtime", "poster_path", "original_language",
             "popularity", "vote_average", "vote_count", "cached_at",
         }
@@ -149,6 +149,10 @@ class TestMovieModel:
         col = _col(Movie, "cached_at")
         assert isinstance(col.type, DateTime)
         assert col.type.timezone is True
+
+    def test_imdb_id_type(self):
+        assert isinstance(_col(Movie, "imdb_id").type, String)
+        assert _col(Movie, "imdb_id").type.length == 50
 
 
 # ---------------------------------------------------------------------------
