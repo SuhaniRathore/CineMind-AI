@@ -292,3 +292,48 @@ def run_nlp_batch(
         errors=result.errors,
         message=message,
     )
+
+
+@router.post(
+    "/nlp/summarize",
+    response_model=NLPBatchRunResponse,
+    summary="Run the NLP summarization batch pipeline",
+)
+def run_nlp_summarization_batch(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _auth: None = Depends(_require_admin),
+) -> NLPBatchRunResponse:
+    """
+    Run extractive summarization for all movies that have un-summarized
+    or modified reviews.
+
+    Processing is synchronous — the response is returned when the batch
+    is complete.
+
+    **Requires X-Admin-Secret header.**
+    """
+    from app.nlp.summarization_batch import NLPSummarizationRunner
+
+    logger.info("Admin: NLP summarization batch run triggered.")
+
+    runner = NLPSummarizationRunner(db, settings)
+    result = runner.run(batch_size=50)
+
+    message = (
+        f"NLP summarization batch complete. "
+        f"processed={result.processed}, "
+        f"skipped={result.skipped}, "
+        f"failed={result.failed}. "
+        f"Errors: {len(result.errors)}"
+    )
+    logger.info(message)
+
+    return NLPBatchRunResponse(
+        processed=result.processed,
+        skipped=result.skipped,
+        failed=result.failed,
+        total_seen=result.total_seen,
+        errors=result.errors,
+        message=message,
+    )

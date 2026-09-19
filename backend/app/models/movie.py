@@ -86,6 +86,13 @@ class Movie(Base):
 
     # overview_embedding (pgvector) intentionally absent — added at V2 Milestone 15.
 
+    # ------------------------------------------------------------------
+    # Derived NLP analysis fields (Milestone 13)
+    # ------------------------------------------------------------------
+    review_summary: Mapped[str | None] = mapped_column(String, nullable=True)
+    review_summary_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     cached_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

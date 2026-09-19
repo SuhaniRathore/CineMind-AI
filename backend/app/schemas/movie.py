@@ -1,4 +1,4 @@
-﻿"""
+"""
 Pydantic response schemas for the movies endpoints (Milestone 4).
 
 All API responses use these schemas — no raw ORM objects are ever returned
@@ -55,8 +55,8 @@ class MovieOut(BaseModel):
     vote_average: float | None
     vote_count: int | None
     cached_at: datetime
+    review_summary: str | None = None
     genres: list[GenreOut] = []
-
     @computed_field  # type: ignore[misc]
     @property
     def poster_url(self) -> str | None:

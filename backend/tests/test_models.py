@@ -121,6 +121,7 @@ class TestMovieModel:
             "id", "tmdb_id", "imdb_id", "title", "overview", "release_date",
             "runtime", "poster_path", "original_language",
             "popularity", "vote_average", "vote_count", "cached_at",
+            "review_summary", "review_summary_updated_at"
         }
         assert cols == expected
 
