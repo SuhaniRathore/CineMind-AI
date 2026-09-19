@@ -24,6 +24,12 @@ class ReviewResponse(ReviewBase):
     created_at: datetime
     updated_at: datetime
 
+    # NLP analysis results
+    sentiment_label: str | None = None
+    sentiment_score: float | None = None
+    aspect_sentiment: dict | None = None
+    nlp_processed_at: datetime | None = None
+
 
 class ReviewListResponse(BaseModel):
     reviews: list[ReviewResponse]

@@ -88,6 +88,15 @@ class PipelineStatusResponse(BaseModel):
     movielens_variant: str
 
 
+class NLPBatchRunResponse(BaseModel):
+    processed: int
+    skipped: int
+    failed: int
+    total_seen: int
+    errors: list[str]
+    message: str
+
+
 # ---------------------------------------------------------------------------
 # TMDB client dependency (reuse existing pattern from movies router)
 # ---------------------------------------------------------------------------
@@ -229,4 +238,57 @@ def pipeline_status(
         collaborative_model_path=store.artifact_path("collaborative_svd"),
         movielens_data_present=movielens_present,
         movielens_variant=settings.movielens_variant,
+    )
+
+
+@router.post(
+    "/nlp/run",
+    response_model=NLPBatchRunResponse,
+    summary="Run the NLP batch pipeline over unprocessed reviews",
+)
+def run_nlp_batch(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _auth: None = Depends(_require_admin),
+) -> NLPBatchRunResponse:
+    """
+    Run sentiment and aspect-sentiment analysis on all Review rows whose
+    ``nlp_processed_at`` column is NULL (i.e. not yet processed).
+
+    Processing is synchronous — the response is returned when the batch
+    is complete.  For very large review tables, trigger this from the
+    CLI instead.
+
+    Fields returned:
+      - **processed** — reviews successfully analysed and committed.
+      - **skipped**   — reviews with empty/blank body (marked done, not retried).
+      - **failed**    — reviews that raised an exception (left NULL, retried next run).
+      - **total_seen** — processed + skipped + failed.
+      - **errors**    — human-readable description of each per-review failure.
+
+    **Requires X-Admin-Secret header.**
+    """
+    from app.nlp.batch import NLPBatchRunner
+
+    logger.info("Admin: NLP batch run triggered.")
+
+    runner = NLPBatchRunner(db, settings)
+    result = runner.run(batch_size=100)
+
+    message = (
+        f"NLP batch complete. "
+        f"processed={result.processed}, "
+        f"skipped={result.skipped}, "
+        f"failed={result.failed}. "
+        f"Errors: {len(result.errors)}"
+    )
+    logger.info(message)
+
+    return NLPBatchRunResponse(
+        processed=result.processed,
+        skipped=result.skipped,
+        failed=result.failed,
+        total_seen=result.total_seen,
+        errors=result.errors,
+        message=message,
     )
