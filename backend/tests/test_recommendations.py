@@ -195,3 +195,65 @@ class TestRecommendations:
         assert resp.status_code == 200
         # Should return 0 since there are no HIGH ratings (>=7)
         assert resp.json()["total"] == 0
+
+
+    def test_deep_collab_uses_ncf_artifact(self, monkeypatch, client, auth_header):
+        from app.api.routes import recommendations as recommendations_route
+        from app.core.config import get_settings
+        from app.ml import ncf_adapter
+
+        settings = _test_settings()
+        settings.use_deep_collab = True
+        client.app.dependency_overrides[get_settings] = lambda: settings
+
+        captured = {}
+
+        class FakeStore:
+            def load_ncf(self, name):
+                captured["artifact_name"] = name
+                return "fake_model", "fake_preprocessor"
+
+            def load(self, name):
+                raise AssertionError("SVD artifact should not be loaded when NCF is enabled")
+
+        class FakeAdapter:
+            is_trained = True
+
+            def __init__(self, model, preprocessor):
+                captured["model"] = model
+                captured["preprocessor"] = preprocessor
+
+        class FakeHybrid:
+            def __init__(self, settings, collab_model):
+                captured["collab_model"] = collab_model
+
+            def recommend(self, db, user_id, limit):
+                return []
+
+        monkeypatch.setattr(
+            recommendations_route,
+            "ModelStore",
+            lambda settings: FakeStore(),
+        )
+        monkeypatch.setattr(
+            ncf_adapter,
+            "NCFCollaborativeAdapter",
+            FakeAdapter,
+        )
+        monkeypatch.setattr(
+            recommendations_route,
+            "HybridRecommender",
+            FakeHybrid,
+        )
+
+        response = client.get(
+            "/api/v1/recommendations",
+            headers=auth_header,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 0
+        assert captured["artifact_name"] == "collaborative_ncf"
+        assert captured["model"] == "fake_model"
+        assert captured["preprocessor"] == "fake_preprocessor"
+        assert isinstance(captured["collab_model"], FakeAdapter)

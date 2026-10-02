@@ -1,5 +1,5 @@
 """
-Admin API router — Milestone 12.
+Admin API router — Milestones 12 & 14.
 
 Protected endpoints for triggering the data pipeline and ML model training.
 These are NOT for end-users — they are operational/maintenance endpoints.
@@ -68,7 +68,8 @@ def _require_admin(
 class PipelineRunRequest(BaseModel):
     download: bool = True    # Download MovieLens dataset if not present
     enrich: bool = True      # Enrich movies with TMDB details
-    train: bool = True       # Train collaborative model after loading
+    train: bool = True       # Train SVD collaborative model after loading
+    train_ncf: bool = False  # Also train the NCF deep-learning model (M14, slow ~30 min)
 
 
 class PipelineRunResponse(BaseModel):
@@ -77,6 +78,8 @@ class PipelineRunResponse(BaseModel):
     genres_synced: int
     model_trained: bool
     model_path: str
+    ncf_model_trained: bool = False   # M14
+    ncf_model_path: str = ""          # M14
     errors: list[str]
     message: str
 
@@ -84,6 +87,8 @@ class PipelineRunResponse(BaseModel):
 class PipelineStatusResponse(BaseModel):
     collaborative_model_ready: bool
     collaborative_model_path: str
+    ncf_model_ready: bool = False     # M14
+    ncf_model_path: str = ""          # M14
     movielens_data_present: bool
     movielens_variant: str
 
@@ -139,14 +144,15 @@ def run_pipeline(
     """
     from app.services.data_pipeline.seed_runner import SeedRunner
 
-    logger.info("Admin: pipeline run triggered (download=%s, enrich=%s, train=%s)",
-                body.download, body.enrich, body.train)
+    logger.info("Admin: pipeline run triggered (download=%s, enrich=%s, train=%s, train_ncf=%s)",
+                body.download, body.enrich, body.train, body.train_ncf)
 
     runner = SeedRunner(db, tmdb_client, settings)
     result = runner.run(
         download=body.download,
         enrich=body.enrich,
         train=body.train,
+        train_ncf=body.train_ncf,
     )
 
     error_count = len(result.errors)
@@ -154,7 +160,8 @@ def run_pipeline(
         f"Pipeline complete. "
         f"linked={result.movielens.movies_linked}, "
         f"enriched={result.enrichment.enriched}, "
-        f"model_trained={result.model_trained}. "
+        f"svd_trained={result.model_trained}, "
+        f"ncf_trained={result.ncf_model_trained}. "
         f"Errors: {error_count}"
     )
 
@@ -164,6 +171,8 @@ def run_pipeline(
         genres_synced=result.movielens.genres_synced,
         model_trained=result.model_trained,
         model_path=result.model_path,
+        ncf_model_trained=result.ncf_model_trained,
+        ncf_model_path=result.ncf_model_path,
         errors=result.errors,
         message=message,
     )
@@ -195,10 +204,15 @@ def train_model(
     """
     from app.services.data_pipeline.seed_runner import SeedRunner
 
-    logger.info("Admin: model retrain triggered")
+    logger.info("Admin: model retrain triggered (train_ncf=%s)", settings.use_deep_collab)
 
     runner = SeedRunner(db, tmdb_client, settings)
-    result = runner.run(download=False, enrich=False, train=True)
+    result = runner.run(
+        download=False,
+        enrich=False,
+        train=True,
+        train_ncf=settings.use_deep_collab,
+    )
 
     return PipelineRunResponse(
         movies_linked=result.movielens.movies_linked,
@@ -206,8 +220,15 @@ def train_model(
         genres_synced=result.movielens.genres_synced,
         model_trained=result.model_trained,
         model_path=result.model_path,
+        ncf_model_trained=result.ncf_model_trained,
+        ncf_model_path=result.ncf_model_path,
         errors=result.errors,
-        message=f"Model retrain complete. trained={result.model_trained}. Errors: {len(result.errors)}",
+        message=(
+            f"Model retrain complete. "
+            f"svd_trained={result.model_trained}, "
+            f"ncf_trained={result.ncf_model_trained}. "
+            f"Errors: {len(result.errors)}"
+        ),
     )
 
 
@@ -229,6 +250,7 @@ def pipeline_status(
 
     store = ModelStore(settings)
     collab_ready = store.exists("collaborative_svd")
+    ncf_ready = store.ncf_exists("collaborative_ncf")
 
     movielens_dir = Path(settings.data_dir) / "movielens" / settings.movielens_variant
     movielens_present = (movielens_dir / "movies.csv").exists()
@@ -236,6 +258,8 @@ def pipeline_status(
     return PipelineStatusResponse(
         collaborative_model_ready=collab_ready,
         collaborative_model_path=store.artifact_path("collaborative_svd"),
+        ncf_model_ready=ncf_ready,
+        ncf_model_path=str((Path(settings.models_dir) / "collaborative_ncf").resolve()),
         movielens_data_present=movielens_present,
         movielens_variant=settings.movielens_variant,
     )

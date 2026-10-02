@@ -34,9 +34,16 @@ scikit-learn==1.6.1
 # scipy: required by scikit-surprise internally; pinned for reproducibility.
 pandas==2.2.3
 numpy==1.26.4
-scikit-surprise==1.1.4
+scikit-surprise==1.1.5
 joblib==1.4.2
 scipy==1.13.1
+
+# Deep Learning — Neural Collaborative Filtering (Milestone 14)
+# CPU-only PyTorch build to keep the Docker image small (~800 MB vs ~5 GB CUDA).
+# In Docker (Dockerfile) this line is supplemented with the --index-url flag.
+# On a CUDA-capable machine, replace with the matching CUDA wheel if faster training is desired.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.3.1
 
 # Testing
 pytest==8.3.4

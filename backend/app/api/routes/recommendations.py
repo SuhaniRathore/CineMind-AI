@@ -48,7 +48,16 @@ def get_recommendations(
     """
     # Load collaborative model (returns None if artifact not found)
     store = ModelStore(settings)
-    collab_model = store.load("collaborative_svd")
+    
+    collab_model = None
+    if settings.use_deep_collab:
+        ncf_artifact = store.load_ncf("collaborative_ncf")
+        if ncf_artifact:
+            from app.ml.ncf_adapter import NCFCollaborativeAdapter
+            model, preprocessor = ncf_artifact
+            collab_model = NCFCollaborativeAdapter(model, preprocessor)
+    else:
+        collab_model = store.load("collaborative_svd")
 
     # Build hybrid recommender
     recommender = HybridRecommender(settings, collab_model)

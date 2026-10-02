@@ -4,8 +4,8 @@ MovieLens dataset loader — Milestone 12.
 Responsibilities:
   - Parse MovieLens CSV files (movies.csv, ratings.csv, links.csv, tags.csv).
   - Map MovieLens movie IDs → our internal movie rows via tmdb_id (using links.csv).
-  - Upsert new movies discovered in MovieLens that are not yet in our DB
-    (using tmdb_id as the stable key, just like the TMDB sync flow).
+  - Upsert new movies discovered in MovieLens that are not yet in our DB, provided
+    they have a valid tmdb_id in links.csv (movies missing a tmdb_id are safely skipped).
   - Update movies.imdb_id for cross-referencing.
   - Return a training-ready ratings DataFrame (userId, internalMovieId, rating)
     with ratings normalised from MovieLens 0.5–5.0 scale to 1–10 scale
@@ -180,20 +180,40 @@ class MovieLensLoader:
         tmdb_to_internal: dict[int, int] = {}
 
         all_movies = db.query(Movie).filter(Movie.tmdb_id.in_(list(ml_id_to_imdb.keys()))).all()
+        existing_tmdb_ids = set()
         for movie in all_movies:
             imdb_str = ml_id_to_imdb.get(movie.tmdb_id, "")
             if imdb_str and movie.imdb_id != imdb_str:
                 movie.imdb_id = imdb_str
                 result.movies_linked += 1
             tmdb_to_internal[movie.tmdb_id] = movie.id
+            existing_tmdb_ids.add(movie.tmdb_id)
+
+        # Upsert missing movies (excluding those without a valid TMDB ID)
+        new_movies = []
+        missing_df = merged[(~merged["tmdbId"].isin(existing_tmdb_ids)) & (merged["tmdbId"] > 0)].drop_duplicates("tmdbId")
+        for _, row in missing_df.iterrows():
+            if pd.isna(row["title"]):
+                continue
+            new_movies.append(Movie(
+                tmdb_id=int(row["tmdbId"]),
+                imdb_id=str(row["imdb_id_str"]),
+                title=str(row["title"])
+            ))
+
+        if new_movies:
+            db.add_all(new_movies)
+            db.flush()
+            for m in new_movies:
+                tmdb_to_internal[m.tmdb_id] = m.id
 
         db.flush()
         logger.info(
-            "MovieLens link: %d movies linked with imdb_id, %d tmdb_ids not in our DB",
+            "MovieLens link: %d movies linked with imdb_id, %d new movies upserted",
             result.movies_linked,
-            len(merged) - len(all_movies),
+            len(new_movies),
         )
-        result.movies_missing = len(merged) - len(all_movies)
+        result.movies_missing = len(new_movies)
 
         # --- 5. Build training ratings DataFrame ---
         # Map ml movieId → our internal movie_id (via tmdb_id bridge)
@@ -201,10 +221,11 @@ class MovieLensLoader:
         ml_movie_to_tmdb = tmdb_series.to_dict()
 
         # Expand to: ml_movie_id → internal_movie_id
+        # (Exclude tmdb_id=0, which represents a missing TMDB ID in the dataset)
         ml_to_internal = {
             ml_id: tmdb_to_internal[tmdb_id]
             for ml_id, tmdb_id in ml_movie_to_tmdb.items()
-            if tmdb_id in tmdb_to_internal
+            if tmdb_id > 0 and tmdb_id in tmdb_to_internal
         }
 
         train_df = ratings_df[ratings_df["movieId"].isin(ml_to_internal)].copy()

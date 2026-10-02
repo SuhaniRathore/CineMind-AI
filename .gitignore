@@ -34,6 +34,8 @@ ml-experiments/**/*.ckpt
 ml-experiments/**/*.pt
 ml-experiments/**/*.h5
 .ipynb_checkpoints/
+data/
+backend/data/
 
 # --- Docker ---
 docker-compose.override.yml

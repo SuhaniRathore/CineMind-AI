@@ -64,7 +64,9 @@ class Settings(BaseSettings):
     admin_api_secret: str = "changeme-admin-secret"
 
     # MovieLens dataset variant to download/expect.
-    # Supported: 'ml-latest-small' (recommended) or 'ml-latest'.
+    # Defaults to 'ml-latest-small' for fast local development and testing.
+    # For actual M14 deep-learning NCF training, override to 'ml-25m' in your .env file
+    # to provide sufficient training data.
     movielens_variant: str = "ml-latest-small"
 
     # Minimum number of in-app ratings a user must have before the
@@ -74,6 +76,31 @@ class Settings(BaseSettings):
     # Hybrid blend weight for content-based score (0.0–1.0).
     # collaborative weight = 1.0 - hybrid_content_weight
     hybrid_content_weight: float = 0.4
+
+    # ---------------------------------------------------------------------------
+    # Milestone 14 — NCF (Neural Collaborative Filtering) settings
+    # ---------------------------------------------------------------------------
+
+    # Set to True in .env to enable NCF training alongside the SVD model.
+    # When True, the NCF model is preferred over SVD in HybridRecommender
+    # if its artifact is present.
+    use_deep_collab: bool = False
+
+    # NCF training epochs (early-stop may terminate before this limit).
+    ncf_epochs: int = 20
+
+    # Mini-batch size for NCF training.
+    # 1024 works well for ml-25m on 8 GB RAM; reduce if OOM.
+    ncf_batch_size: int = 1024
+
+    # NCF embedding dimensions and MLP hidden layer widths.
+    # These match the plan defaults and can be overridden via .env.
+    ncf_gmf_dim: int = 64
+    ncf_mlp_layers: list[int] = [128, 64, 32, 16]
+    ncf_dropout: float = 0.2
+    ncf_lr: float = 1e-3
+    ncf_weight_decay: float = 1e-5
+    ncf_early_stop_patience: int = 3
 
 
 @lru_cache
