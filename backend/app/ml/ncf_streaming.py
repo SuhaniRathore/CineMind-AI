@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +24,7 @@ import torch.nn as nn
 from torch.utils.data import IterableDataset
 
 from app.ml.ncf_data import NCFDataPreprocessor
-from app.ml.ncf_model import singleton_batchnorm_eval
+from app.ml.ncf_model import NCFModel, singleton_batchnorm_eval
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,31 @@ class NCFStreamingDataset(IterableDataset):
                 f"{self._split}_*.npz"
             )
         )
+
+    @property
+    def shard_dir(self) -> Path:
+        return self._shard_dir
+
+    @property
+    def batch_size(self) -> int:
+        return self._batch_size
+
+    @property
+    def seed(self) -> int:
+        return self._seed
+
+    @property
+    def split(self) -> str:
+        return self._split
+
+    @property
+    def shuffle(self) -> bool:
+        return self._shuffle
+
+    def set_epoch(self, epoch: int) -> None:
+        if epoch < 0:
+            raise ValueError("epoch must be non-negative")
+        self._epoch = int(epoch)
 
     def __len__(self) -> int:
         return self._num_rows
@@ -1132,6 +1158,8 @@ class NCFStreamingTrainer:
         weight_decay: float = 1e-5,
         patience: int = 3,
         device: torch.device | None = None,
+        checkpoint_path: str | Path | None = None,
+        resume: bool = False,
     ) -> None:
         self._model = model
         self._train_ds = train_dataset
@@ -1145,6 +1173,14 @@ class NCFStreamingTrainer:
             device
             or torch.device("cpu")
         )
+        self._checkpoint_path = (
+            Path(checkpoint_path)
+            if checkpoint_path is not None
+            else None
+        )
+        self._resume = resume
+        self.history: list[dict[str, float | int]] = []
+        self.elapsed_seconds = 0.0
 
     def train(self) -> float:
         model = self._model.to(
@@ -1162,11 +1198,53 @@ class NCFStreamingTrainer:
         best_rmse = float("inf")
         best_state = None
         no_improve = 0
+        start_epoch = 0
+        completed = False
 
-        for epoch in range(
-            1,
-            self._epochs + 1,
-        ):
+        if self._resume:
+            if self._checkpoint_path is None:
+                raise ValueError("resume requires checkpoint_path")
+            if not self._checkpoint_path.is_file():
+                raise FileNotFoundError(
+                    f"NCF checkpoint does not exist: {self._checkpoint_path}"
+                )
+            checkpoint = self._load_checkpoint()
+            if checkpoint.get("config") != self._checkpoint_config():
+                raise ValueError(
+                    "NCF checkpoint configuration does not match this run"
+                )
+            model.load_state_dict(checkpoint["model_state"])
+            optimizer.load_state_dict(checkpoint["optimizer_state"])
+            best_rmse = float(checkpoint["best_rmse"])
+            best_state = checkpoint["best_state"]
+            no_improve = int(checkpoint["no_improve"])
+            start_epoch = int(checkpoint["epoch"])
+            self.history = list(checkpoint["history"])
+            self.elapsed_seconds = float(checkpoint["elapsed_seconds"])
+            completed = bool(checkpoint["completed"])
+            torch.set_rng_state(checkpoint["torch_rng_state"].cpu())
+            if checkpoint["cuda_rng_states"] is not None:
+                if not torch.cuda.is_available():
+                    raise RuntimeError(
+                        "Checkpoint contains CUDA RNG state but CUDA is unavailable"
+                    )
+                torch.cuda.set_rng_state_all(
+                    [state.cpu() for state in checkpoint["cuda_rng_states"]]
+                )
+            self._train_ds.set_epoch(start_epoch)
+        elif self._checkpoint_path is not None and self._checkpoint_path.exists():
+            raise FileExistsError(
+                f"NCF checkpoint already exists; pass resume=True to continue: "
+                f"{self._checkpoint_path}"
+            )
+
+        if completed:
+            if best_state is not None:
+                model.load_state_dict(best_state)
+            return float(best_rmse)
+
+        run_started = time.perf_counter()
+        for epoch in range(start_epoch + 1, self._epochs + 1):
             model.train()
 
             total_loss = 0.0
@@ -1219,6 +1297,8 @@ class NCFStreamingTrainer:
             )
 
             rmse, mae = self._evaluate()
+            epoch_elapsed = time.perf_counter() - run_started
+            elapsed_seconds = self.elapsed_seconds + epoch_elapsed
 
             logger.info(
                 "Epoch %d/%d | train_loss=%.6f "
@@ -1228,6 +1308,15 @@ class NCFStreamingTrainer:
                 train_loss,
                 rmse,
                 mae,
+            )
+            self.history.append(
+                {
+                    "epoch": epoch,
+                    "train_loss": float(train_loss),
+                    "val_rmse": float(rmse),
+                    "val_mae": float(mae),
+                    "elapsed_seconds": float(elapsed_seconds),
+                }
             )
 
             if rmse < (
@@ -1245,24 +1334,121 @@ class NCFStreamingTrainer:
             else:
                 no_improve += 1
 
-                if (
-                    no_improve
-                    >= self._patience
-                ):
-                    logger.info(
-                        "NCF early stopping at epoch %d",
-                        epoch,
-                    )
-                    break
+            stopped_early = no_improve >= self._patience
+            completed = stopped_early or epoch == self._epochs
+            if self._checkpoint_path is not None:
+                self.elapsed_seconds = elapsed_seconds
+                self._save_checkpoint(
+                    optimizer=optimizer,
+                    best_rmse=best_rmse,
+                    best_state=best_state,
+                    no_improve=no_improve,
+                    epoch=epoch,
+                    completed=completed,
+                )
+
+            if stopped_early:
+                logger.info(
+                    "NCF early stopping at epoch %d",
+                    epoch,
+                )
+                break
 
         if best_state is not None:
             model.load_state_dict(
                 best_state
             )
 
+        if self._checkpoint_path is None:
+            self.elapsed_seconds += time.perf_counter() - run_started
+
         return float(
             best_rmse
         )
+
+    def _checkpoint_config(self) -> dict:
+        if not isinstance(self._model, NCFModel):
+            raise TypeError("Resumable NCF checkpoints require an NCFModel")
+        metadata_path = self._train_ds.shard_dir / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        return {
+            "model": self._model.get_config(),
+            "epochs": self._epochs,
+            "lr": self._lr,
+            "weight_decay": self._weight_decay,
+            "patience": self._patience,
+            "batch_size": self._train_ds.batch_size,
+            "seed": self._train_ds.seed,
+            "split": self._train_ds.split,
+            "shuffle": self._train_ds.shuffle,
+            "fingerprint": metadata.get("fingerprint"),
+            "n_train": int(metadata["n_train"]),
+            "n_val": int(metadata["n_val"]),
+        }
+
+    def _load_checkpoint(self) -> dict:
+        try:
+            checkpoint = torch.load(
+                self._checkpoint_path,
+                map_location=self._device,
+                weights_only=False,
+            )
+        except TypeError:
+            checkpoint = torch.load(
+                self._checkpoint_path,
+                map_location=self._device,
+            )
+        if checkpoint.get("version") != 1:
+            raise ValueError("Unsupported NCF checkpoint version")
+        return checkpoint
+
+    def _save_checkpoint(
+        self,
+        *,
+        optimizer: torch.optim.Optimizer,
+        best_rmse: float,
+        best_state: dict | None,
+        no_improve: int,
+        epoch: int,
+        completed: bool,
+    ) -> None:
+        if self._checkpoint_path is None:
+            return
+        self._checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint = {
+            "version": 1,
+            "config": self._checkpoint_config(),
+            "model_state": self._model.state_dict(),
+            "optimizer_state": optimizer.state_dict(),
+            "best_rmse": best_rmse,
+            "best_state": best_state,
+            "no_improve": no_improve,
+            "epoch": epoch,
+            "history": self.history,
+            "elapsed_seconds": self.elapsed_seconds,
+            "completed": completed,
+            "torch_rng_state": torch.get_rng_state(),
+            "cuda_rng_states": (
+                torch.cuda.get_rng_state_all()
+                if torch.cuda.is_available()
+                else None
+            ),
+        }
+        fd, temp_path = tempfile.mkstemp(
+            dir=self._checkpoint_path.parent,
+            prefix="_ncf_checkpoint_",
+            suffix=".tmp",
+        )
+        try:
+            os.close(fd)
+            torch.save(checkpoint, temp_path)
+            os.replace(temp_path, self._checkpoint_path)
+        except Exception:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                logger.warning("Could not remove temporary NCF checkpoint: %s", temp_path)
+            raise
 
     def _evaluate(
         self,
