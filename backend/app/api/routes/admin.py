@@ -1,17 +1,17 @@
 """
-Admin API router — Milestones 12 & 14.
+Admin API router - Milestones 12 & 14.
 
 Protected endpoints for triggering the data pipeline and ML model training.
-These are NOT for end-users — they are operational/maintenance endpoints.
+These are NOT for end-users - they are operational/maintenance endpoints.
 
 Authentication: Simple bearer API secret (not a JWT) configured via
 ADMIN_API_SECRET in the .env file. This is intentionally simpler than
 JWT because these endpoints are called by ops scripts, not by the UI.
 
 Endpoints:
-  POST /admin/pipeline/run   — run the full data pipeline (download + load + enrich + train)
-  POST /admin/model/train    — train collaborative model from existing data (no re-download)
-  GET  /admin/pipeline/status — basic status info (artifact existence, last run)
+  POST /admin/pipeline/run   - run the full data pipeline (download + load + enrich + train)
+  POST /admin/model/train    - train collaborative model from existing data (no re-download)
+  GET  /admin/pipeline/status - basic status info (artifact existence, last run)
 """
 
 from __future__ import annotations
@@ -132,11 +132,11 @@ def run_pipeline(
     """
     Trigger the full data expansion pipeline:
       1. Download MovieLens dataset (if download=True and not present).
-      2. Load MovieLens CSVs → link imdb_ids, build training data.
+      2. Load MovieLens CSVs -> link imdb_ids, build training data.
       3. Enrich movies with TMDB details (if enrich=True).
       4. Train the collaborative filtering model (if train=True).
 
-    This is a synchronous endpoint — it runs the pipeline inline and
+    This is a synchronous endpoint - it runs the pipeline inline and
     returns when complete. For very large datasets, run this from the
     CLI script (backend/scripts/run_pipeline.py) instead.
 
@@ -210,8 +210,9 @@ def train_model(
     result = runner.run(
         download=False,
         enrich=False,
-        train=True,
+        train=False,
         train_ncf=settings.use_deep_collab,
+        stream_ncf=True,
     )
 
     return PipelineRunResponse(
@@ -279,16 +280,16 @@ def run_nlp_batch(
     Run sentiment and aspect-sentiment analysis on all Review rows whose
     ``nlp_processed_at`` column is NULL (i.e. not yet processed).
 
-    Processing is synchronous — the response is returned when the batch
+    Processing is synchronous - the response is returned when the batch
     is complete.  For very large review tables, trigger this from the
     CLI instead.
 
     Fields returned:
-      - **processed** — reviews successfully analysed and committed.
-      - **skipped**   — reviews with empty/blank body (marked done, not retried).
-      - **failed**    — reviews that raised an exception (left NULL, retried next run).
-      - **total_seen** — processed + skipped + failed.
-      - **errors**    — human-readable description of each per-review failure.
+      - **processed** - reviews successfully analysed and committed.
+      - **skipped**   - reviews with empty/blank body (marked done, not retried).
+      - **failed**    - reviews that raised an exception (left NULL, retried next run).
+      - **total_seen** - processed + skipped + failed.
+      - **errors**    - human-readable description of each per-review failure.
 
     **Requires X-Admin-Secret header.**
     """
@@ -332,7 +333,7 @@ def run_nlp_summarization_batch(
     Run extractive summarization for all movies that have un-summarized
     or modified reviews.
 
-    Processing is synchronous — the response is returned when the batch
+    Processing is synchronous - the response is returned when the batch
     is complete.
 
     **Requires X-Admin-Secret header.**
@@ -361,3 +362,5 @@ def run_nlp_summarization_batch(
         errors=result.errors,
         message=message,
     )
+
+

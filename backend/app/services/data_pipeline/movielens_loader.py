@@ -1,14 +1,14 @@
-"""
-MovieLens dataset loader — Milestone 12.
+﻿"""
+MovieLens dataset loader - Milestone 12.
 
 Responsibilities:
   - Parse MovieLens CSV files (movies.csv, ratings.csv, links.csv, tags.csv).
-  - Map MovieLens movie IDs → our internal movie rows via tmdb_id (using links.csv).
+  - Map MovieLens movie IDs -> our internal movie rows via tmdb_id (using links.csv).
   - Upsert new movies discovered in MovieLens that are not yet in our DB, provided
     they have a valid tmdb_id in links.csv (movies missing a tmdb_id are safely skipped).
   - Update movies.imdb_id for cross-referencing.
   - Return a training-ready ratings DataFrame (userId, internalMovieId, rating)
-    with ratings normalised from MovieLens 0.5–5.0 scale to 1–10 scale
+    with ratings normalised from MovieLens 0.5-5.0 scale to 1-10 scale
     (multiply by 2) so they are comparable to in-app ratings for model training.
 
 IMPORTANT: MovieLens rating rows are NEVER inserted into the app `ratings` table.
@@ -18,10 +18,10 @@ IMPORTANT: MovieLens rating rows are NEVER inserted into the app `ratings` table
   - The training DataFrame is used exclusively by collaborative.py.
 
 Dataset structure expected in data_dir/movielens/<variant>/:
-  movies.csv   — movieId, title, genres (pipe-separated)
-  ratings.csv  — userId, movieId, rating (0.5–5.0), timestamp
-  links.csv    — movieId, imdbId, tmdbId
-  tags.csv     — userId, movieId, tag, timestamp  (optional, not loaded yet)
+  movies.csv   - movieId, title, genres (pipe-separated)
+  ratings.csv  - userId, movieId, rating (0.5-5.0), timestamp
+  links.csv    - movieId, imdbId, tmdbId
+  tags.csv     - userId, movieId, tag, timestamp  (optional, not loaded yet)
 
 Usage::
 
@@ -65,6 +65,9 @@ class MovieLensLoadResult:
     movies_missing: int = 0         # MovieLens movies not found in our DB by tmdb_id
     genres_synced: int = 0          # genre rows upserted from MovieLens genre strings
     training_ratings_df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    ncf_streaming: bool = False
+    ratings_csv_path: str = ""
+    ml_to_internal: dict[int, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
 
@@ -111,14 +114,14 @@ class MovieLensLoader:
         # Ensure parent dirs exist
         dest_zip.parent.mkdir(parents=True, exist_ok=True)
 
-        logger.info("Downloading MovieLens dataset from %s …", url)
+        logger.info("Downloading MovieLens dataset from %s ...", url)
         try:
             import urllib.request
             urllib.request.urlretrieve(url, dest_zip)
         except Exception as exc:
             raise RuntimeError(f"Failed to download MovieLens from {url}: {exc}") from exc
 
-        logger.info("Extracting %s …", dest_zip)
+        logger.info("Extracting %s ...", dest_zip)
         try:
             with zipfile.ZipFile(dest_zip, "r") as zf:
                 zf.extractall(dest_zip.parent)
@@ -134,7 +137,7 @@ class MovieLensLoader:
         logger.info("MovieLens dataset ready at %s", self._dataset_dir)
         return self._dataset_dir
 
-    def load(self, db: "Session") -> MovieLensLoadResult:
+    def load(self, db: "Session", stream_ncf: bool = False) -> MovieLensLoadResult:
         """
         Parse MovieLens CSVs and:
           1. Link existing movies by populating movies.imdb_id.
@@ -156,10 +159,10 @@ class MovieLensLoader:
         result = MovieLensLoadResult()
 
         # --- 1. Load raw CSVs ---
-        logger.info("Loading MovieLens CSVs from %s …", self._dataset_dir)
+        logger.info("Loading MovieLens CSVs from %s ...", self._dataset_dir)
         ml_movies_df = self._load_movies_csv()
         links_df = self._load_links_csv()
-        ratings_df = self._load_ratings_csv()
+        ratings_df = None if stream_ncf else self._load_ratings_csv()
 
         # --- 2. Merge movies with links to get tmdb_id ---
         # links.csv: movieId (int), imdbId (str e.g. '0114709'), tmdbId (int/float)
@@ -176,7 +179,7 @@ class MovieLensLoader:
         ml_id_to_imdb = dict(zip(merged["tmdbId"], merged["imdb_id_str"]))
         ml_id_to_ml_movie_id = dict(zip(merged["tmdbId"], merged["movieId"]))
 
-        # Build a mapping: tmdb_id → internal movie.id  (for training data)
+        # Build a mapping: tmdb_id -> internal movie.id  (for training data)
         tmdb_to_internal: dict[int, int] = {}
 
         all_movies = db.query(Movie).filter(Movie.tmdb_id.in_(list(ml_id_to_imdb.keys()))).all()
@@ -216,11 +219,11 @@ class MovieLensLoader:
         result.movies_missing = len(new_movies)
 
         # --- 5. Build training ratings DataFrame ---
-        # Map ml movieId → our internal movie_id (via tmdb_id bridge)
+        # Map ml movieId -> our internal movie_id (via tmdb_id bridge)
         tmdb_series = merged.set_index("movieId")["tmdbId"]
         ml_movie_to_tmdb = tmdb_series.to_dict()
 
-        # Expand to: ml_movie_id → internal_movie_id
+        # Expand to: ml_movie_id -> internal_movie_id
         # (Exclude tmdb_id=0, which represents a missing TMDB ID in the dataset)
         ml_to_internal = {
             ml_id: tmdb_to_internal[tmdb_id]
@@ -228,11 +231,17 @@ class MovieLensLoader:
             if tmdb_id > 0 and tmdb_id in tmdb_to_internal
         }
 
+        if stream_ncf:
+            result.ncf_streaming = True
+            result.ratings_csv_path = str(self._dataset_dir / "ratings.csv")
+            result.ml_to_internal = ml_to_internal
+            return result
+
         train_df = ratings_df[ratings_df["movieId"].isin(ml_to_internal)].copy()
         train_df["movie_id"] = train_df["movieId"].map(ml_to_internal)
 
-        # Normalise MovieLens 0.5–5.0 float rating → 1–10 scale (×2)
-        # This is for MODEL TRAINING ONLY — not written to the DB ratings table.
+        # Normalise MovieLens 0.5-5.0 float rating -> 1-10 scale (x2)
+        # This is for MODEL TRAINING ONLY - not written to the DB ratings table.
         train_df["rating_normalised"] = (train_df["rating"] * 2).clip(1, 10)
 
         result.training_ratings_df = train_df[["userId", "movie_id", "rating_normalised"]].rename(
@@ -282,7 +291,7 @@ class MovieLensLoader:
         Upsert genre rows from MovieLens genre strings.
 
         MovieLens genres are pipe-separated strings (e.g. "Action|Comedy").
-        We reuse the same Genre table (with tmdb_genre_id) — MovieLens genres
+        We reuse the same Genre table (with tmdb_genre_id) - MovieLens genres
         that don't have a TMDB genre ID are assigned negative IDs to avoid
         collision with real TMDB genre IDs (which start at 12).
 
@@ -291,7 +300,7 @@ class MovieLensLoader:
         """
         # Known TMDB genre IDs for the genres that appear in both
         # MovieLens and TMDB. Non-overlapping ML genres get a synthetic ID.
-        # This mapping is approximate — good enough for TF-IDF feature building.
+        # This mapping is approximate - good enough for TF-IDF feature building.
         _ML_GENRE_TO_TMDB: dict[str, int] = {
             "Action": 28,
             "Adventure": 12,
@@ -333,3 +342,4 @@ class MovieLensLoader:
         db.flush()
         logger.info("MovieLens genre sync: %d new genre(s) created", created)
         return created
+

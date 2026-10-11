@@ -24,12 +24,9 @@ services:
     container_name: cinemind-api
     env_file:
       - ./backend/.env
-    command: >
-      sh -c "alembic upgrade head && 
-      uvicorn app.main:app --host 0.0.0.0 --port 8000 & 
-      sleep 3 && 
-      python -c \"import urllib.request; urllib.request.urlopen(urllib.request.Request('http://localhost:8000/api/v1/movies/sync', method='POST'))\" && 
-      wait"
+    command: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    volumes:
+      - mldata:/app/data
     depends_on:
       db:
         condition: service_healthy
@@ -55,3 +52,5 @@ services:
 volumes:
   pgdata:
     name: cinemind-pgdata
+  mldata:
+    name: cinemind-mldata

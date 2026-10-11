@@ -1,5 +1,5 @@
-﻿"""
-Memory-safe streaming NCF utilities â€” Milestone 14.
+"""
+Memory-safe streaming NCF utilities — Milestone 14.
 
 Large MovieLens datasets are processed from CSV chunks into on-disk NPZ
 shards. Training and validation are then streamed in batches without
@@ -216,7 +216,7 @@ class NCFStreamingDataset(IterableDataset):
                     full_rows:
                 ].copy()
 
-        if len(carry_users) > 1:
+        if len(carry_users) > 0:
             yield (
                 torch.from_numpy(
                     carry_users.astype(
@@ -278,75 +278,83 @@ class NCFStreamingPreprocessor(
             extra_ratings_df is not None
             and not extra_ratings_df.empty
         )
+        extra_fingerprint = self._extra_ratings_fingerprint(
+            extra_ratings_df
+        )
 
-        fingerprint = self._fingerprint(
-            ratings_csv,
-            ml_to_internal,
+        # Only fingerprint a real ratings dataset. In some deployed environments,
+        # a header-only placeholder CSV may exist while the saved shards are the
+        # only available copy of the prepared MovieLens data.
+        source_has_rows = self._has_ratings_rows(ratings_csv)
+        fingerprint = (
+            self._fingerprint(ratings_csv, ml_to_internal)
+            if source_has_rows
+            else None
         )
 
         metadata_path = (
             output_dir / "metadata.json"
         )
 
-        if (
-            not has_extra
-            and metadata_path.exists()
-        ):
+        metadata: dict | None = None
+        cache_valid = False
+        if metadata_path.exists():
             try:
                 metadata = json.loads(
-                    metadata_path.read_text(
-                        encoding="utf-8"
+                    metadata_path.read_text(encoding="utf-8")
+                )
+                train_shards = list(output_dir.glob("train_*.npz"))
+                val_shards = list(output_dir.glob("val_*.npz"))
+                cache_valid = (
+                    metadata.get("version") == 2
+                    and isinstance(metadata.get("fingerprint"), str)
+                    and "user_to_idx" in metadata
+                    and "movie_to_idx" in metadata
+                    and "n_users" in metadata
+                    and "n_items" in metadata
+                    and bool(train_shards)
+                    and (
+                        int(metadata.get("n_val", 0)) == 0
+                        or bool(val_shards)
                     )
                 )
 
-                cache_valid = (
-                    metadata.get(
-                        "fingerprint"
-                    )
-                    == fingerprint
-                    and bool(
-                        list(
-                            output_dir.glob(
-                                "train_*.npz"
-                            )
+                # With genuine source data, stale cache must not be reused.
+                # With no rows (missing/header-only placeholder), retain a
+                # structurally valid cache instead of invalidating saved shards.
+                if cache_valid and source_has_rows:
+                    cache_valid = metadata.get("fingerprint") == fingerprint
+
+                # App ratings are part of the effective dataset. Do not reuse
+                # a cache if their fingerprint differs from the saved one.
+                if cache_valid:
+                    if "extra_ratings_fingerprint" in metadata:
+                        cache_valid = (
+                            metadata.get("extra_ratings_fingerprint")
+                            == extra_fingerprint
                         )
-                    )
-                    and (
-                        int(
-                            metadata.get(
-                                "n_val",
-                                0,
-                            )
+                    else:
+                        # Legacy caches had no app-rating fingerprint. Only
+                        # reuse one if there is no current or cached app data.
+                        cache_valid = (
+                            extra_fingerprint is None
+                            and not list(output_dir.glob("train_extra_*.npz"))
                         )
-                        == 0
-                        or bool(
-                            list(
-                                output_dir.glob(
-                                    "val_*.npz"
-                                )
-                            )
-                        )
-                    )
-                )
 
                 if cache_valid:
-                    self._restore_metadata(
-                        metadata
-                    )
-
+                    self._restore_metadata(metadata)
+                    n_train = self._count_shard_rows(train_shards)
+                    n_val = self._count_shard_rows(val_shards)
                     logger.info(
                         "Using cached NCF streaming shards: %s",
                         output_dir,
                     )
-
                     return (
                         NCFStreamingDataset(
                             output_dir,
                             split="train",
                             batch_size=batch_size,
-                            num_rows=metadata[
-                                "n_train"
-                            ],
+                            num_rows=n_train,
                             shuffle=True,
                             seed=seed,
                         ),
@@ -354,331 +362,338 @@ class NCFStreamingPreprocessor(
                             output_dir,
                             split="val",
                             batch_size=batch_size,
-                            num_rows=metadata[
-                                "n_val"
-                            ],
+                            num_rows=n_val,
                             shuffle=False,
                             seed=seed,
                         ),
                     )
-
-            except Exception:
+            except Exception as exc:
+                cache_valid = False
                 logger.warning(
-                    "Invalid NCF streaming cache; rebuilding."
+                    "Invalid NCF streaming cache; cannot reuse it: %s",
+                    exc,
                 )
 
-        self._clear_output(
-            output_dir
-        )
-
-        # --------------------------------------------------------------
-        # PASS 1
-        # Discover all valid users and internal movies.
-        # --------------------------------------------------------------
-        user_ids: set[int] = set()
-        movie_ids: set[int] = set()
-
-        logger.info(
-            "NCF streaming pass 1 starting..."
-        )
-
-        for chunk in pd.read_csv(
-            ratings_csv,
-            usecols=[
-                "userId",
-                "movieId",
-                "rating",
-            ],
-            dtype={
-                "userId": np.int32,
-                "movieId": np.int32,
-                "rating": np.float32,
-            },
-            chunksize=chunk_size,
-        ):
-            internal_ids = (
-                chunk["movieId"]
-                .map(ml_to_internal)
+        # Never clear shards unless a real ratings source is available to
+        # rebuild them. This protects the only prepared copy of MovieLens data.
+        if not cache_valid and not source_has_rows:
+            raise ValueError(
+                "Cannot rebuild NCF streaming shards because ratings.csv is "
+                "missing or has no data rows and no valid cache is available. "
+                "Existing shard files have been left untouched."
             )
 
-            valid = internal_ids.notna()
+        if not cache_valid:
+            self._clear_output(output_dir)
 
-            if not valid.any():
-                continue
+        # --------------------------------------------------------------
+            # PASS 1
+            # Discover all valid users and internal movies.
+            # --------------------------------------------------------------
+            user_ids: set[int] = set()
+            movie_ids: set[int] = set()
 
-            user_ids.update(
-                chunk.loc[
-                    valid,
+            logger.info(
+                "NCF streaming pass 1 starting..."
+            )
+
+            for chunk in pd.read_csv(
+                ratings_csv,
+                usecols=[
                     "userId",
-                ]
-                .astype(int)
-                .unique()
-                .tolist()
-            )
-
-            movie_ids.update(
-                internal_ids.loc[
-                    valid
-                ]
-                .astype(int)
-                .unique()
-                .tolist()
-            )
-
-        # --------------------------------------------------------------
-        # Add in-app users and movies.
-        # --------------------------------------------------------------
-        extra_user_keys: list[str] = []
-
-        if has_extra:
-            extra = extra_ratings_df[
-                [
-                    "ml_user_id",
-                    "movie_id",
+                    "movieId",
                     "rating",
-                ]
-            ].dropna()
-
-            extra_user_keys = sorted(
-                extra[
-                    "ml_user_id"
-                ]
-                .astype(str)
-                .unique()
-                .tolist()
-            )
-
-            movie_ids.update(
-                extra[
-                    "movie_id"
-                ]
-                .astype(int)
-                .unique()
-                .tolist()
-            )
-
-        self.user_to_idx = {
-            f"ml_{user_id}": idx
-            for idx, user_id
-            in enumerate(
-                sorted(user_ids)
-            )
-        }
-
-        next_user_idx = len(
-            self.user_to_idx
-        )
-
-        for user_key in extra_user_keys:
-            if user_key not in self.user_to_idx:
-                self.user_to_idx[
-                    user_key
-                ] = next_user_idx
-
-                next_user_idx += 1
-
-        self.movie_to_idx = {
-            movie_id: idx
-            for idx, movie_id
-            in enumerate(
-                sorted(movie_ids)
-            )
-        }
-
-        self.idx_to_movie = {
-            idx: movie_id
-            for movie_id, idx
-            in self.movie_to_idx.items()
-        }
-
-        self.n_users = len(
-            self.user_to_idx
-        )
-
-        self.n_items = len(
-            self.movie_to_idx
-        )
-
-        # --------------------------------------------------------------
-        # PASS 2
-        # Create train and validation shards.
-        # --------------------------------------------------------------
-        logger.info(
-            "NCF streaming pass 2 starting..."
-        )
-
-        rng = np.random.default_rng(
-            seed
-        )
-
-        seen_users: set[int] = set()
-
-        train_index = 0
-        val_index = 0
-
-        n_train = 0
-        n_val = 0
-
-        for chunk in pd.read_csv(
-            ratings_csv,
-            usecols=[
-                "userId",
-                "movieId",
-                "rating",
-            ],
-            dtype={
-                "userId": np.int32,
-                "movieId": np.int32,
-                "rating": np.float32,
-            },
-            chunksize=chunk_size,
-        ):
-            chunk[
-                "internal_movie_id"
-            ] = (
-                chunk["movieId"]
-                .map(ml_to_internal)
-            )
-
-            chunk = chunk.dropna(
-                subset=[
-                    "internal_movie_id"
-                ]
-            )
-
-            if chunk.empty:
-                continue
-
-            already_seen = (
-                chunk["userId"].isin(
-                    seen_users
+                ],
+                dtype={
+                    "userId": np.int32,
+                    "movieId": np.int32,
+                    "rating": np.float32,
+                },
+                chunksize=chunk_size,
+            ):
+                internal_ids = (
+                    chunk["movieId"]
+                    .map(ml_to_internal)
                 )
-            )
 
-            first_new_user_row = (
-                ~chunk["userId"].duplicated(
-                    keep="first"
+                valid = internal_ids.notna()
+
+                if not valid.any():
+                    continue
+
+                user_ids.update(
+                    chunk.loc[
+                        valid,
+                        "userId",
+                    ]
+                    .astype(int)
+                    .unique()
+                    .tolist()
                 )
-            )
 
-            first_global_interaction = (
-                (~already_seen)
-                & first_new_user_row
-            )
-
-            seen_users.update(
-                chunk[
-                    "userId"
-                ]
-                .astype(int)
-                .unique()
-                .tolist()
-            )
-
-            random_values = rng.random(
-                len(chunk)
-            )
-
-            is_val = (
-                ~first_global_interaction.to_numpy()
-            ) & (
-                random_values
-                >= (
-                    1.0
-                    - val_fraction
+                movie_ids.update(
+                    internal_ids.loc[
+                        valid
+                    ]
+                    .astype(int)
+                    .unique()
+                    .tolist()
                 )
+
+            # --------------------------------------------------------------
+            # Add in-app users and movies.
+            # --------------------------------------------------------------
+            extra_user_keys: list[str] = []
+
+            if has_extra:
+                extra = extra_ratings_df[
+                    [
+                        "ml_user_id",
+                        "movie_id",
+                        "rating",
+                    ]
+                ].dropna()
+
+                extra_user_keys = sorted(
+                    extra[
+                        "ml_user_id"
+                    ]
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                )
+
+                movie_ids.update(
+                    extra[
+                        "movie_id"
+                    ]
+                    .astype(int)
+                    .unique()
+                    .tolist()
+                )
+
+            self.user_to_idx = {
+                f"ml_{user_id}": idx
+                for idx, user_id
+                in enumerate(
+                    sorted(user_ids)
+                )
+            }
+
+            next_user_idx = len(
+                self.user_to_idx
             )
 
-            users = (
-                chunk["userId"]
-                .astype(int)
-                .map(
-                    lambda user_id:
+            for user_key in extra_user_keys:
+                if user_key not in self.user_to_idx:
                     self.user_to_idx[
-                        f"ml_{user_id}"
+                        user_key
+                    ] = next_user_idx
+
+                    next_user_idx += 1
+
+            self.movie_to_idx = {
+                movie_id: idx
+                for idx, movie_id
+                in enumerate(
+                    sorted(movie_ids)
+                )
+            }
+
+            self.idx_to_movie = {
+                idx: movie_id
+                for movie_id, idx
+                in self.movie_to_idx.items()
+            }
+
+            self.n_users = len(
+                self.user_to_idx
+            )
+
+            self.n_items = len(
+                self.movie_to_idx
+            )
+
+            # --------------------------------------------------------------
+            # PASS 2
+            # Create train and validation shards.
+            # --------------------------------------------------------------
+            logger.info(
+                "NCF streaming pass 2 starting..."
+            )
+
+            rng = np.random.default_rng(
+                seed
+            )
+
+            seen_users: set[int] = set()
+
+            train_index = 0
+            val_index = 0
+
+            n_train = 0
+            n_val = 0
+
+            for chunk in pd.read_csv(
+                ratings_csv,
+                usecols=[
+                    "userId",
+                    "movieId",
+                    "rating",
+                ],
+                dtype={
+                    "userId": np.int32,
+                    "movieId": np.int32,
+                    "rating": np.float32,
+                },
+                chunksize=chunk_size,
+            ):
+                chunk[
+                    "internal_movie_id"
+                ] = (
+                    chunk["movieId"]
+                    .map(ml_to_internal)
+                )
+
+                chunk = chunk.dropna(
+                    subset=[
+                        "internal_movie_id"
                     ]
                 )
-                .to_numpy(
-                    dtype=np.int32
-                )
-            )
 
-            items = (
-                chunk[
-                    "internal_movie_id"
-                ]
-                .astype(int)
-                .map(
-                    self.movie_to_idx
-                )
-                .to_numpy(
-                    dtype=np.int32
-                )
-            )
+                if chunk.empty:
+                    continue
 
-            ratings = (
-                chunk["rating"]
-                .to_numpy(
-                    dtype=np.float32
-                )
-            )
-
-            if self.use_implicit:
-                labels = (
-                    ratings
-                    >= 7.0
-                ).astype(
-                    np.float32
-                )
-            else:
-                labels = (
-                    (ratings * 2.0)
-                    - 1.0
-                ) / 9.0
-
-            train_mask = ~is_val
-
-            if train_mask.any():
-                np.savez(
-                    output_dir
-                    / f"train_{train_index:06d}.npz",
-                    users=users[
-                        train_mask
-                    ],
-                    items=items[
-                        train_mask
-                    ],
-                    labels=labels[
-                        train_mask
-                    ],
+                already_seen = (
+                    chunk["userId"].isin(
+                        seen_users
+                    )
                 )
 
-                train_index += 1
-
-                n_train += int(
-                    train_mask.sum()
+                first_new_user_row = (
+                    ~chunk["userId"].duplicated(
+                        keep="first"
+                    )
                 )
 
-            if is_val.any():
-                np.savez(
-                    output_dir
-                    / f"val_{val_index:06d}.npz",
-                    users=users[
-                        is_val
-                    ],
-                    items=items[
-                        is_val
-                    ],
-                    labels=labels[
-                        is_val
-                    ],
+                first_global_interaction = (
+                    (~already_seen)
+                    & first_new_user_row
                 )
 
-                val_index += 1
-
-                n_val += int(
-                    is_val.sum()
+                seen_users.update(
+                    chunk[
+                        "userId"
+                    ]
+                    .astype(int)
+                    .unique()
+                    .tolist()
                 )
+
+                random_values = rng.random(
+                    len(chunk)
+                )
+
+                is_val = (
+                    ~first_global_interaction.to_numpy()
+                ) & (
+                    random_values
+                    >= (
+                        1.0
+                        - val_fraction
+                    )
+                )
+
+                users = (
+                    chunk["userId"]
+                    .astype(int)
+                    .map(
+                        lambda user_id:
+                        self.user_to_idx[
+                            f"ml_{user_id}"
+                        ]
+                    )
+                    .to_numpy(
+                        dtype=np.int32
+                    )
+                )
+
+                items = (
+                    chunk[
+                        "internal_movie_id"
+                    ]
+                    .astype(int)
+                    .map(
+                        self.movie_to_idx
+                    )
+                    .to_numpy(
+                        dtype=np.int32
+                    )
+                )
+
+                ratings = (
+                    chunk["rating"]
+                    .to_numpy(
+                        dtype=np.float32
+                    )
+                )
+
+                if self.use_implicit:
+                    labels = (
+                        ratings
+                        >= 7.0
+                    ).astype(
+                        np.float32
+                    )
+                else:
+                    labels = (
+                        (ratings * 2.0)
+                        - 1.0
+                    ) / 9.0
+
+                train_mask = ~is_val
+
+                if train_mask.any():
+                    np.savez(
+                        output_dir
+                        / f"train_{train_index:06d}.npz",
+                        users=users[
+                            train_mask
+                        ],
+                        items=items[
+                            train_mask
+                        ],
+                        labels=labels[
+                            train_mask
+                        ],
+                    )
+
+                    train_index += 1
+
+                    n_train += int(
+                        train_mask.sum()
+                    )
+
+                if is_val.any():
+                    np.savez(
+                        output_dir
+                        / f"val_{val_index:06d}.npz",
+                        users=users[
+                            is_val
+                        ],
+                        items=items[
+                            is_val
+                        ],
+                        labels=labels[
+                            is_val
+                        ],
+                    )
+
+                    val_index += 1
+
+                    n_val += int(
+                        is_val.sum()
+                    )
 
         # --------------------------------------------------------------
         # Add in-app ratings to training.
@@ -693,6 +708,20 @@ class NCFStreamingPreprocessor(
             ].dropna()
 
             if not extra.empty:
+                next_user_idx = len(self.user_to_idx)
+                for u in extra["ml_user_id"].astype(str).unique():
+                    if u not in self.user_to_idx:
+                        self.user_to_idx[u] = next_user_idx
+                        next_user_idx += 1
+                self.n_users = len(self.user_to_idx)
+
+                next_item_idx = len(self.movie_to_idx)
+                for i in extra["movie_id"].astype(int).unique():
+                    if i not in self.movie_to_idx:
+                        self.movie_to_idx[i] = next_item_idx
+                        next_item_idx += 1
+                self.n_items = len(self.movie_to_idx)
+
                 extra_users = (
                     extra[
                         "ml_user_id"
@@ -738,15 +767,22 @@ class NCFStreamingPreprocessor(
                     labels=extra_labels,
                 )
 
-                n_train += len(
-                    extra
-                )
+        # Recount rows from the files on disk. In particular, do not add
+        # len(extra) to a cached n_train value: the previous extra shard may
+        # already have been included in that metadata.
+        n_train = self._count_shard_rows(
+            list(output_dir.glob("train_*.npz"))
+        )
+        n_val = self._count_shard_rows(
+            list(output_dir.glob("val_*.npz"))
+        )
 
         self._is_fitted = True
 
         metadata = {
             "version": 2,
             "fingerprint": fingerprint,
+            "extra_ratings_fingerprint": extra_fingerprint,
             "n_users": self.n_users,
             "n_items": self.n_items,
             "n_train": n_train,
@@ -820,6 +856,90 @@ class NCFStreamingPreprocessor(
                 "utf-8"
             )
         ).hexdigest()
+
+    @staticmethod
+    def _extra_ratings_fingerprint(
+        extra_ratings_df: pd.DataFrame | None,
+    ) -> str | None:
+        """Fingerprint normalized app ratings for safe cache reuse."""
+        if extra_ratings_df is None or extra_ratings_df.empty:
+            return None
+
+        required = {"ml_user_id", "movie_id", "rating"}
+        if not required.issubset(extra_ratings_df.columns):
+            raise ValueError(
+                "Extra ratings must contain columns: "
+                f"{sorted(required)}"
+            )
+
+        extra = extra_ratings_df[
+            ["ml_user_id", "movie_id", "rating"]
+        ].dropna()
+        rows = sorted(
+            (
+                str(user_id),
+                int(movie_id),
+                float(rating),
+            )
+            for user_id, movie_id, rating
+            in extra.itertuples(index=False, name=None)
+        )
+        payload = json.dumps(rows, separators=(",", ":"), allow_nan=False)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _has_ratings_rows(
+        ratings_csv: Path,
+    ) -> bool:
+        """Return whether ratings.csv contains at least one data row.
+
+        A valid header-only placeholder is treated as unavailable source data.
+        An unrelated/malformed CSV raises instead of silently triggering a rebuild.
+        """
+        if not ratings_csv.is_file():
+            return False
+
+        try:
+            columns = pd.read_csv(ratings_csv, nrows=0).columns
+        except pd.errors.EmptyDataError:
+            return False
+
+        required = {"userId", "movieId", "rating"}
+        if not required.issubset(set(columns)):
+            raise ValueError(
+                f"Ratings CSV must contain columns: {sorted(required)}"
+            )
+
+        try:
+            first_row = pd.read_csv(
+                ratings_csv,
+                usecols=["userId", "movieId", "rating"],
+                nrows=1,
+            )
+        except pd.errors.EmptyDataError:
+            return False
+
+        return not first_row.empty
+
+    @staticmethod
+    def _count_shard_rows(
+        shards: list[Path],
+    ) -> int:
+        """Count stored rows from NPZ shards instead of trusting stale metadata."""
+        total = 0
+        for shard_path in shards:
+            with np.load(shard_path, allow_pickle=False) as data:
+                lengths = (
+                    len(data["users"]),
+                    len(data["items"]),
+                    len(data["labels"]),
+                )
+            if len(set(lengths)) != 1:
+                raise ValueError(
+                    f"Inconsistent array lengths in NCF shard: {shard_path}"
+                )
+            total += lengths[0]
+        return total
 
     def _restore_metadata(
         self,
@@ -959,10 +1079,30 @@ class NCFStreamingTrainer:
                     set_to_none=True
                 )
 
-                predictions = model(
-                    user_batch,
-                    item_batch,
-                )
+                # BatchNorm cannot estimate batch statistics from a singleton.
+                # Keep the final row and temporarily use its running statistics.
+                batch_norm_states = []
+                if user_batch.shape[0] == 1:
+                    for module in model.modules():
+                        if isinstance(
+                            module,
+                            nn.modules.batchnorm._BatchNorm,
+                        ):
+                            batch_norm_states.append(
+                                (module, module.training)
+                            )
+                            module.eval()
+
+                try:
+                    predictions = model(
+                        user_batch,
+                        item_batch,
+                    )
+                finally:
+                    # Restore only these BatchNorm modules; keep the model's
+                    # other layers in the training mode set by model.train().
+                    for module, was_training in batch_norm_states:
+                        module.training = was_training
 
                 loss = criterion(
                     predictions,
