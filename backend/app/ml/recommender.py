@@ -23,6 +23,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.movie import Movie
+from app.models.recommendation import (
+    ALGORITHM_CONTENT_BASED,
+    ALGORITHM_POPULARITY_BASED,
+)
 from app.models.rating import Rating
 
 
@@ -73,14 +77,39 @@ def generate_recommendations(
     user_id: int,
     limit: int = 10,
 ) -> list[tuple[int, float]]:
-    """
-    Generate content-based recommendations for a user.
+    """Return recommendation IDs and scores, preserving the original API."""
+    return [
+        (movie_id, score)
+        for movie_id, score, _ in generate_recommendations_with_source(
+            db,
+            user_id,
+            limit,
+        )
+    ]
 
-    Returns a list of (movie_id, relevance_score) tuples, sorted descending.
+
+def generate_recommendations_with_source(
+    db: Session,
+    user_id: int,
+    limit: int = 10,
+) -> list[tuple[int, float, str]]:
+    """
+    Generate recommendations and retain whether popularity fallback was used.
+
+    Returns (movie_id, relevance_score, algorithm) tuples, sorted descending.
 
     Users without useful rating signals receive popular-movie recommendations
     instead of an empty result, provided popularity metadata is available.
     """
+    def tagged(
+        recommendations: list[tuple[int, float]],
+        algorithm: str,
+    ) -> list[tuple[int, float, str]]:
+        return [
+            (movie_id, score, algorithm)
+            for movie_id, score in recommendations
+        ]
+
     # 1. Fetch the user's ratings.
     user_ratings = db.scalars(
         select(Rating).where(Rating.user_id == user_id)
@@ -88,7 +117,10 @@ def generate_recommendations(
 
     # Cold start: no ratings available.
     if not user_ratings:
-        return _popular_fallback(db, limit)
+        return tagged(
+            _popular_fallback(db, limit),
+            ALGORITHM_POPULARITY_BASED,
+        )
 
     rated_movie_ids = {
         rating.movie_id
@@ -104,10 +136,13 @@ def generate_recommendations(
 
     # Cold start: ratings exist, but none is highly rated.
     if not highly_rated:
-        return _popular_fallback(
-            db,
-            limit,
-            exclude_ids=rated_movie_ids,
+        return tagged(
+            _popular_fallback(
+                db,
+                limit,
+                exclude_ids=rated_movie_ids,
+            ),
+            ALGORITHM_POPULARITY_BASED,
         )
 
     preferred_movie_ids = {
@@ -124,10 +159,13 @@ def generate_recommendations(
 
     # Defensive fallback if rated movie records are unavailable.
     if not preferred_movies:
-        return _popular_fallback(
-            db,
-            limit,
-            exclude_ids=rated_movie_ids,
+        return tagged(
+            _popular_fallback(
+                db,
+                limit,
+                exclude_ids=rated_movie_ids,
+            ),
+            ALGORITHM_POPULARITY_BASED,
         )
 
     # Candidate movies: those the user has not rated.
@@ -168,10 +206,13 @@ def generate_recommendations(
 
     # No unrated candidates available.
     if not candidate_movie_ids_list:
-        return _popular_fallback(
-            db,
-            limit,
-            exclude_ids=rated_movie_ids,
+        return tagged(
+            _popular_fallback(
+                db,
+                limit,
+                exclude_ids=rated_movie_ids,
+            ),
+            ALGORITHM_POPULARITY_BASED,
         )
 
     # 4. Compute the TF-IDF matrix.
@@ -182,10 +223,13 @@ def generate_recommendations(
             metadata_corpus
         )
     except ValueError:
-        return _popular_fallback(
-            db,
-            limit,
-            exclude_ids=rated_movie_ids,
+        return tagged(
+            _popular_fallback(
+                db,
+                limit,
+                exclude_ids=rated_movie_ids,
+            ),
+            ALGORITHM_POPULARITY_BASED,
         )
 
     # 5. Compute similarities between preferred movies and candidates.
@@ -224,10 +268,16 @@ def generate_recommendations(
 
     # Use popular movies when content metadata produces no matches.
     if not recommendations:
-        return _popular_fallback(
-            db,
-            limit,
-            exclude_ids=rated_movie_ids,
+        return tagged(
+            _popular_fallback(
+                db,
+                limit,
+                exclude_ids=rated_movie_ids,
+            ),
+            ALGORITHM_POPULARITY_BASED,
         )
 
-    return recommendations[:limit]
+    return tagged(
+        recommendations[:limit],
+        ALGORITHM_CONTENT_BASED,
+    )

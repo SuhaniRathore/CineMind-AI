@@ -3,6 +3,13 @@ import api from '../api/client';
 import MovieCard from '../components/MovieCard';
 import LoadingSpinner from '../components/LoadingSpinner';
 
+const algorithmLabels = {
+  content_based: 'Based on your ratings',
+  collaborative: 'Collaborative pick',
+  hybrid: 'Hybrid pick',
+  popularity_based: 'Popular right now',
+};
+
 const Recommendations = () => {
   const [recommendations, setRecommendations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -42,7 +49,7 @@ const Recommendations = () => {
             <div className="glass-panel text-center" style={{textAlign: 'center', padding: '4rem 2rem'}}>
               <h3>Not enough data yet</h3>
               <p className="text-muted mt-2">
-                We need to know what you like! Rate a few movies highly (7 or above), and we'll suggest more you might enjoy.
+                We need to know what you like! Rate a few movies highly (7 or above), and we&apos;ll suggest more you might enjoy.
               </p>
             </div>
           ) : (
@@ -61,7 +68,10 @@ const Recommendations = () => {
                     fontWeight: 'bold',
                     boxShadow: '0 4px 6px rgba(0,0,0,0.3)'
                   }}>
-                    {Math.round(rec.relevance_score * 100)}% Match
+                    {algorithmLabels[rec.algorithm] || 'Recommended'}
+                    {rec.algorithm !== 'popularity_based' && (
+                      <> · {Math.round(rec.relevance_score * 100)}% Match</>
+                    )}
                   </div>
                 </div>
               ))}

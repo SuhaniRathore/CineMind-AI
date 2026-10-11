@@ -28,6 +28,7 @@ from app.db.database import Base
 ALGORITHM_CONTENT_BASED = "content_based"
 ALGORITHM_COLLABORATIVE = "collaborative"
 ALGORITHM_HYBRID = "hybrid"
+ALGORITHM_POPULARITY_BASED = "popularity_based"
 
 
 class RecommendationResult(Base):
@@ -55,7 +56,7 @@ class RecommendationResult(Base):
         nullable=False,
     )
     # algorithm: which engine produced this row (Milestone 12).
-    # One of: 'content_based', 'collaborative', 'hybrid'.
+    # One of: 'content_based', 'collaborative', 'hybrid', 'popularity_based'.
     algorithm: Mapped[str] = mapped_column(
         String(50),
         nullable=False,

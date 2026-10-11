@@ -1,6 +1,21 @@
 # ML_NLP_PLAN.md — CineMind AI
 
-Planning only — no models are trained or implemented yet. Each component lists Input / Output / Possible Algorithm / Dataset / Evaluation, plus the tier it belongs to.
+This document records the original proposal and the verified implementation status. Planned approaches are not evidence of a trained or production-wired model.
+
+## Implementation Status (October 11, 2026)
+
+| Component | Current status |
+|---|---|
+| Content-based recommendations | Implemented and exercised by API tests; uses cached movie genre/language metadata. |
+| Popularity fallback | Implemented for cold-start and no-match cases; reported separately as `popularity_based`. |
+| Collaborative filtering (SVD) | Training and artifact-loading code exists; availability depends on a locally trained artifact. |
+| Hybrid recommendation | Implemented; requires enough in-app ratings and usable model predictions. |
+| Neural Collaborative Filtering (NCF) | PyTorch model, streaming dataset/trainer, persisted-artifact loader, and conditional API inference are implemented. Saved artifacts/shards exist, but a fresh MovieLens 25M run and its evaluation are unverified. The mounted ratings CSV is header-only. |
+| Sentiment, aspect analysis, summarization | Backend components and tests exist; these are not currently exposed as a complete user-facing workflow. |
+| Semantic search / embeddings | Planned; no verified pgvector-backed semantic-search endpoint. |
+| Explainable recommendations | Planned; recommendation `reason_text` remains empty until a real explanation layer is implemented. |
+
+See the root README for the current dataset and live-service checks. Sections below preserve the intended design and evaluation criteria, not a claim that each milestone is complete.
 
 ---
 
@@ -74,6 +89,6 @@ Planning only — no models are trained or implemented yet. Each component lists
 | Explainability | Qualitative (human review) |
 
 ## Notes
-- MVP intentionally uses **no trained models** — only metadata similarity — to keep the first working version simple, fast to build, and easy to defend in a viva.
+- The original MVP intentionally used no trained models — only metadata similarity — to keep the first working version simple, fast to build, and easy to defend in a viva. The repository has since added collaborative and NCF components; their code and artifacts do not, by themselves, establish a successful fresh training run.
 - All V2 models should be trainable/runnable on modest hardware (student laptop or a single cloud GPU/CPU instance at most) — large fine-tuning jobs are out of scope; prefer pretrained models used via inference or lightweight fine-tuning.
 - Every model choice above should be revisited and confirmed (not silently swapped) at the point its milestone is actually reached, since library availability/ease-of-use may shift the specific choice within the same approach.

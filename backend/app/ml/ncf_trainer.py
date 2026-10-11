@@ -23,7 +23,7 @@ Design decisions:
 Usage::
 
     from app.ml.ncf_trainer import NCFTrainer
-    from app.ml.ncf_model import NCFModel
+    from app.ml.ncf_model import NCFModel, singleton_batchnorm_eval
     from app.ml.ncf_data import NCFDataPreprocessor
 
     pre = NCFDataPreprocessor(use_implicit=False)
@@ -55,6 +55,7 @@ from torch.utils.data import DataLoader
 
 from app.ml.ncf_data import NCFDataPreprocessor, NCFDataset
 from app.ml.ncf_evaluation import evaluate_ncf
+from app.ml.ncf_model import singleton_batchnorm_eval
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +227,8 @@ class NCFTrainer:
             label_batch = label_batch.to(self._device)
 
             optimiser.zero_grad(set_to_none=True)
-            preds = model(user_batch, item_batch)
+            with singleton_batchnorm_eval(model, user_batch.shape[0]):
+                preds = model(user_batch, item_batch)
             loss = criterion(preds, label_batch)
             loss.backward()
             optimiser.step()

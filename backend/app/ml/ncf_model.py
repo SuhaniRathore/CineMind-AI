@@ -37,12 +37,36 @@ Usage::
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from typing import Sequence
+from collections.abc import Iterator
 
 import torch
 import torch.nn as nn
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def singleton_batchnorm_eval(model: nn.Module, batch_size: int) -> Iterator[None]:
+    """Use running BatchNorm statistics for singleton training batches."""
+    if batch_size != 1:
+        yield
+        return
+
+    batch_norm_layers = [
+        module
+        for module in model.modules()
+        if isinstance(module, nn.modules.batchnorm._BatchNorm)
+    ]
+    training_states = [module.training for module in batch_norm_layers]
+    try:
+        for module in batch_norm_layers:
+            module.eval()
+        yield
+    finally:
+        for module, was_training in zip(batch_norm_layers, training_states):
+            module.train(was_training)
 
 
 class NCFModel(nn.Module):

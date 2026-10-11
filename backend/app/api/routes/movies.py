@@ -1,4 +1,4 @@
-﻿"""
+"""
 Movies API router — Milestone 4.
 
 Endpoints:

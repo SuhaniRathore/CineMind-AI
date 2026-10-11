@@ -19,7 +19,8 @@ the blend. If only one source has scores (cold-start or no model), that
 source's scores are used directly (weight = 1.0).
 
 Algorithm tag written to recommendation_results.algorithm:
-  - "content_based"  → user has < collab_min_ratings or no trained model
+  - "popularity_based" → popularity fallback supplied recommendations
+  - "content_based"  → metadata similarity supplied recommendations
   - "collaborative"  → model is trained but content scores are all 0
   - "hybrid"         → both content and collaborative scores contributed
 
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 from app.ml.collaborative import CollaborativeFilteringModel
-from app.ml.recommender import generate_recommendations
+from app.ml.recommender import generate_recommendations_with_source
 from app.models.movie import Movie
 from app.models.rating import Rating
 from app.models.recommendation import (
@@ -128,10 +129,15 @@ class HybridRecommender:
             and in_app_rating_count >= self._min_ratings
         )
 
-        # 1. Content-based scores (existing recommender)
-        content_recs: list[tuple[int, float]] = generate_recommendations(
+        # Preserve whether the metadata recommender used its popularity fallback.
+        source_recs = generate_recommendations_with_source(
             db, user_id, limit=limit * 3  # fetch extra, collab will rerank
         )
+        content_recs = [
+            (movie_id, score)
+            for movie_id, score, algorithm in source_recs
+            if algorithm == ALGORITHM_CONTENT_BASED
+        ]
 
         # 2. Collaborative scores (if model trained and user has enough ratings)
         collab_recs: list[tuple[int, float]] = []
@@ -141,7 +147,6 @@ class HybridRecommender:
                 r.movie_id
                 for r in db.query(Rating).filter(Rating.user_id == user_id).all()
             }
-            content_ids = {mid for mid, _ in content_recs}
             all_movie_ids = [
                 m.id for m in db.query(Movie.id).all()
                 if m.id not in rated_ids
@@ -149,6 +154,18 @@ class HybridRecommender:
             collab_recs = self._collab.predict_top_n(
                 user_id, all_movie_ids, n=limit * 3
             )
+
+        if not use_collab:
+            return [
+                (movie_id, score, algorithm, None)
+                for movie_id, score, algorithm in source_recs[:limit]
+            ]
+
+        if not collab_recs and not content_recs:
+            return [
+                (movie_id, score, algorithm, None)
+                for movie_id, score, algorithm in source_recs[:limit]
+            ]
 
         # 3. Determine algorithm tag and blend
         return self._blend(content_recs, collab_recs, limit, use_collab, in_app_rating_count)
@@ -198,8 +215,8 @@ class HybridRecommender:
         for i, mid in enumerate(id_list):
             c = norm_content[i]
             cf = norm_collab[i]
-            has_content = c > 0
-            has_collab = cf > 0
+            has_content = mid in content_dict
+            has_collab = mid in collab_dict
 
             if has_content and has_collab:
                 score = self._w_content * c + self._w_collab * cf

@@ -1,16 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { Bookmark, BookmarkCheck, Clock, Calendar } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 import LoadingSpinner from '../components/LoadingSpinner';
 import StarRating from '../components/StarRating';
 
 const MovieDetails = () => {
   const { id } = useParams();
+  const { user } = useAuth();
   const [movie, setMovie] = useState(null);
   const [loading, setLoading] = useState(true);
   
   const [userRating, setUserRating] = useState(0);
+  const [userRatingId, setUserRatingId] = useState(null);
+  const [ratingError, setRatingError] = useState('');
   const [inWatchlist, setInWatchlist] = useState(false);
   const [watchlistItemId, setWatchlistItemId] = useState(null);
   
@@ -18,6 +22,15 @@ const MovieDetails = () => {
   const [newReviewTitle, setNewReviewTitle] = useState('');
   const [newReviewBody, setNewReviewBody] = useState('');
   const [reviewError, setReviewError] = useState('');
+
+  const fetchReviews = useCallback(async () => {
+    try {
+      const res = await api.get(`/reviews?movie_id=${id}`);
+      setReviews(res.data.reviews);
+    } catch (e) {
+      console.error("Failed to fetch reviews", e);
+    }
+  }, [id]);
 
   useEffect(() => {
     const fetchMovieData = async () => {
@@ -30,11 +43,19 @@ const MovieDetails = () => {
         // For MVP, we might just try to fetch their ratings or catch 404
         try {
           // This requires backend support for fetching a specific rating, but we can list ratings and find it
-          const ratingsRes = await api.get(`/ratings?movie_id=${id}`);
-          if (ratingsRes.data.ratings.length > 0) {
-            setUserRating(ratingsRes.data.ratings[0].rating);
-          }
-        } catch (e) { /* ignore */ }
+          const ratingsRes = await api.get('/ratings', {
+            params: { movie_id: id, user_id: user.id },
+          });
+          const rating = ratingsRes.data.ratings.find(
+            (item) => item.user_id === user.id && item.movie_id === Number(id)
+          );
+          setUserRating(rating?.rating || 0);
+          setUserRatingId(rating?.id || null);
+        } catch (error) {
+          setRatingError(
+            error.response?.data?.detail || 'Could not load your rating.'
+          );
+        }
 
         // Fetch watchlist status
         try {
@@ -60,23 +81,21 @@ const MovieDetails = () => {
     };
 
     fetchMovieData();
-  }, [id]);
-
-  const fetchReviews = async () => {
-    try {
-      const res = await api.get(`/reviews?movie_id=${id}`);
-      setReviews(res.data.reviews);
-    } catch (e) {
-      console.error("Failed to fetch reviews", e);
-    }
-  };
+  }, [id, user.id, fetchReviews]);
 
   const handleRate = async (ratingValue) => {
+    setRatingError('');
     try {
-      await api.post('/ratings', { movie_id: parseInt(id), rating: ratingValue });
+      const payload = { movie_id: Number(id), rating: ratingValue };
+      const response = userRatingId
+        ? await api.put(`/ratings/${userRatingId}`, { rating: ratingValue })
+        : await api.post('/ratings', payload);
       setUserRating(ratingValue);
-    } catch (e) {
-      console.error("Failed to rate", e);
+      setUserRatingId(response.data.id);
+    } catch (error) {
+      setRatingError(
+        error.response?.data?.detail || 'Could not save your rating.'
+      );
     }
   };
 
@@ -141,6 +160,7 @@ const MovieDetails = () => {
             <div className="mt-4">
               <StarRating rating={userRating} onRate={handleRate} />
             </div>
+            {ratingError && <p className="error-text mt-2">{ratingError}</p>}
 
             <button 
               onClick={toggleWatchlist} 

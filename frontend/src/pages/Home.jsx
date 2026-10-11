@@ -9,10 +9,12 @@ const Home = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [error, setError] = useState('');
 
   useEffect(() => {
     const fetchMovies = async () => {
       setLoading(true);
+      setError('');
       try {
         let url = '/movies?limit=24';
         if (searchQuery) {
@@ -20,8 +22,9 @@ const Home = () => {
         }
         const response = await api.get(url);
         setMovies(response.data.movies);
-      } catch (error) {
-        console.error("Failed to fetch movies", error);
+      } catch (fetchError) {
+        console.error("Failed to fetch movies", fetchError);
+        setError('Could not load movies. Please try again.');
       } finally {
         setLoading(false);
       }
@@ -55,6 +58,10 @@ const Home = () => {
 
       {loading ? (
         <LoadingSpinner />
+      ) : error ? (
+        <div className="glass-panel text-center">
+          <p className="error-text">{error}</p>
+        </div>
       ) : (
         <>
           {movies.length === 0 ? (

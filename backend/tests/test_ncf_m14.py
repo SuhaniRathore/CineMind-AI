@@ -25,6 +25,41 @@ def test_ncf_model_forward_implicit():
     assert out.shape == (2,), "Output shape should match batch size"
     assert torch.all(out >= 0) and torch.all(out <= 1), "Implicit mode should return probabilities in [0, 1]"
 
+
+def test_ncf_trainer_handles_singleton_training_batch():
+    from app.ml.ncf_trainer import NCFTrainer
+
+    ratings = pd.DataFrame(
+        {
+            "ml_user_id": ["user_1", "user_1"],
+            "movie_id": [101, 102],
+            "rating": [8.0, 6.0],
+        }
+    )
+    preprocessor = NCFDataPreprocessor()
+    train_dataset, val_dataset = preprocessor.fit_transform(ratings)
+    model = NCFModel(
+        n_users=preprocessor.n_users,
+        n_items=preprocessor.n_items,
+        gmf_dim=4,
+        mlp_layers=[8, 4],
+        dropout=0.0,
+    )
+    trainer = NCFTrainer(
+        model=model,
+        train_dataset=train_dataset,
+        val_dataset=val_dataset,
+        preprocessor=preprocessor,
+        epochs=1,
+        batch_size=8,
+        patience=1,
+    )
+
+    assert len(train_dataset) == 1
+    assert len(val_dataset) == 1
+    assert trainer.train() >= 0
+
+
 def test_ncf_data_preprocessor_stratified_split():
     # 2 users, user1 has 10 ratings, user2 has 1 rating
     df = pd.DataFrame({

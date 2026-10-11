@@ -2,6 +2,13 @@
 
 Each milestone should end in something runnable/testable — not just code that "should work." We do not start milestone N+1 until N is functionally verified.
 
+## Current Verification Snapshot — October 11, 2026
+
+- Compose API, PostgreSQL, and web containers are running; health reports the database connected.
+- Backend, frontend, and core CRUD/recommendation code are implemented. Verification results are reported in the root README and latest project handoff, not inferred from milestone labels.
+- NCF inference is conditionally wired to recommendations. Existing model artifacts and prepared shards are present, but the configured MovieLens 25M ratings CSV is header-only; fresh full-dataset training and evaluation remain unverified.
+- Semantic search/pgvector and the remaining V2/V3 roadmap features remain planned or incomplete unless independently verified.
+
 ## Milestone 1 — Project Foundation
 - Repo structure, `.gitignore`, `README.md` skeleton
 - Backend package skeleton (routers/services/models/schemas/ml folders, empty but structured)

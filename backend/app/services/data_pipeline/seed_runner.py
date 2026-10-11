@@ -1,4 +1,4 @@
-﻿"""
+"""
 Seed runner — Milestones 12 & 14.
 
 Supports:

@@ -1,4 +1,4 @@
-﻿"""
+"""
 MovieLens dataset loader - Milestone 12.
 
 Responsibilities:

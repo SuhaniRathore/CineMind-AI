@@ -12,6 +12,8 @@ import copy
 import hashlib
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +23,7 @@ import torch.nn as nn
 from torch.utils.data import IterableDataset
 
 from app.ml.ncf_data import NCFDataPreprocessor
+from app.ml.ncf_model import singleton_batchnorm_eval
 
 logger = logging.getLogger(__name__)
 
@@ -287,10 +290,21 @@ class NCFStreamingPreprocessor(
         # only available copy of the prepared MovieLens data.
         source_has_rows = self._has_ratings_rows(ratings_csv)
         fingerprint = (
-            self._fingerprint(ratings_csv, ml_to_internal)
+            self._fingerprint(
+                ratings_csv,
+                ml_to_internal,
+                use_implicit=self.use_implicit,
+                val_fraction=val_fraction,
+                seed=seed,
+            )
             if source_has_rows
             else None
         )
+        preprocessing = {
+            "use_implicit": self.use_implicit,
+            "val_fraction": float(val_fraction),
+            "seed": int(seed),
+        }
 
         metadata_path = (
             output_dir / "metadata.json"
@@ -305,18 +319,24 @@ class NCFStreamingPreprocessor(
                 )
                 train_shards = list(output_dir.glob("train_*.npz"))
                 val_shards = list(output_dir.glob("val_*.npz"))
+                cache_version = metadata.get("version")
                 cache_valid = (
-                    metadata.get("version") == 2
+                    cache_version in (2, 3)
                     and isinstance(metadata.get("fingerprint"), str)
-                    and "user_to_idx" in metadata
-                    and "movie_to_idx" in metadata
-                    and "n_users" in metadata
-                    and "n_items" in metadata
-                    and bool(train_shards)
                     and (
-                        int(metadata.get("n_val", 0)) == 0
-                        or bool(val_shards)
+                        cache_version == 2
+                        or metadata.get("preprocessing") == preprocessing
                     )
+                    and self._has_contiguous_indices(
+                        metadata.get("user_to_idx"),
+                        metadata.get("n_users"),
+                    )
+                    and self._has_contiguous_indices(
+                        metadata.get("movie_to_idx"),
+                        metadata.get("n_items"),
+                    )
+                    and bool(train_shards)
+                    and int(metadata.get("n_train", 0)) > 0
                 )
 
                 # With genuine source data, stale cache must not be reused.
@@ -324,6 +344,13 @@ class NCFStreamingPreprocessor(
                 # structurally valid cache instead of invalidating saved shards.
                 if cache_valid and source_has_rows:
                     cache_valid = metadata.get("fingerprint") == fingerprint
+                elif cache_valid and cache_version == 2:
+                    cache_valid = (
+                        not source_has_rows
+                        and not self.use_implicit
+                        and val_fraction == _VAL_FRACTION
+                        and seed == 42
+                    )
 
                 # App ratings are part of the effective dataset. Do not reuse
                 # a cache if their fingerprint differs from the saved one.
@@ -343,8 +370,26 @@ class NCFStreamingPreprocessor(
 
                 if cache_valid:
                     self._restore_metadata(metadata)
-                    n_train = self._count_shard_rows(train_shards)
-                    n_val = self._count_shard_rows(val_shards)
+                    cache_valid = (
+                        len(self.user_to_idx) == self.n_users
+                        and len(self.movie_to_idx) == self.n_items
+                    )
+                if cache_valid:
+                    n_train = self._count_shard_rows(
+                        train_shards,
+                        n_users=self.n_users,
+                        n_items=self.n_items,
+                    )
+                    n_val = self._count_shard_rows(
+                        val_shards,
+                        n_users=self.n_users,
+                        n_items=self.n_items,
+                    )
+                    cache_valid = (
+                        n_train == int(metadata["n_train"])
+                        and n_val == int(metadata.get("n_val", 0))
+                    )
+                if cache_valid:
                     logger.info(
                         "Using cached NCF streaming shards: %s",
                         output_dir,
@@ -383,10 +428,20 @@ class NCFStreamingPreprocessor(
                 "Existing shard files have been left untouched."
             )
 
-        if not cache_valid:
-            self._clear_output(output_dir)
+        if not cache_valid and (
+            metadata_path.exists()
+            or any(output_dir.glob("train_*.npz"))
+            or any(output_dir.glob("train_extra_*.npz"))
+            or any(output_dir.glob("val_*.npz"))
+        ):
+            raise ValueError(
+                "Existing NCF cache is stale or invalid. Its files have been "
+                "left untouched; choose a new output directory or explicitly "
+                "archive the existing cache before rebuilding."
+            )
 
-        # --------------------------------------------------------------
+        if not cache_valid:
+            # --------------------------------------------------------------
             # PASS 1
             # Discover all valid users and internal movies.
             # --------------------------------------------------------------
@@ -513,6 +568,12 @@ class NCFStreamingPreprocessor(
             self.n_items = len(
                 self.movie_to_idx
             )
+
+            if self.n_users == 0 or self.n_items == 0:
+                raise ValueError(
+                    "The ratings CSV and internal movie mapping produced no "
+                    "usable NCF interactions. Existing shards were left untouched."
+                )
 
             # --------------------------------------------------------------
             # PASS 2
@@ -721,6 +782,10 @@ class NCFStreamingPreprocessor(
                         self.movie_to_idx[i] = next_item_idx
                         next_item_idx += 1
                 self.n_items = len(self.movie_to_idx)
+                self.idx_to_movie = {
+                    idx: movie_id
+                    for movie_id, idx in self.movie_to_idx.items()
+                }
 
                 extra_users = (
                     extra[
@@ -748,13 +813,8 @@ class NCFStreamingPreprocessor(
                     )
                 )
 
-                extra_labels = (
-                    (
-                        extra[
-                            "rating"
-                        ].astype(float)
-                        - 1.0
-                    ) / 9.0
+                extra_labels = self._encode_rating_labels(
+                    extra["rating"].astype(float)
                 ).to_numpy(
                     dtype=np.float32
                 )
@@ -771,18 +831,23 @@ class NCFStreamingPreprocessor(
         # len(extra) to a cached n_train value: the previous extra shard may
         # already have been included in that metadata.
         n_train = self._count_shard_rows(
-            list(output_dir.glob("train_*.npz"))
+            list(output_dir.glob("train_*.npz")),
+            n_users=self.n_users,
+            n_items=self.n_items,
         )
         n_val = self._count_shard_rows(
-            list(output_dir.glob("val_*.npz"))
+            list(output_dir.glob("val_*.npz")),
+            n_users=self.n_users,
+            n_items=self.n_items,
         )
 
         self._is_fitted = True
 
         metadata = {
-            "version": 2,
+            "version": 3,
             "fingerprint": fingerprint,
             "extra_ratings_fingerprint": extra_fingerprint,
+            "preprocessing": preprocessing,
             "n_users": self.n_users,
             "n_items": self.n_items,
             "n_train": n_train,
@@ -795,12 +860,29 @@ class NCFStreamingPreprocessor(
             },
         }
 
-        metadata_path.write_text(
-            json.dumps(
-                metadata
-            ),
-            encoding="utf-8",
-        )
+        temp_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=output_dir,
+                prefix="_metadata_",
+                suffix=".tmp",
+                delete=False,
+            ) as temp_file:
+                temp_path = temp_file.name
+                json.dump(metadata, temp_file)
+            os.replace(temp_path, metadata_path)
+        except Exception:
+            if temp_path is not None:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    logger.warning(
+                        "Could not remove temporary NCF metadata file: %s",
+                        temp_path,
+                    )
+            raise
 
         logger.info(
             "NCF streaming dataset ready: "
@@ -834,10 +916,18 @@ class NCFStreamingPreprocessor(
     def _fingerprint(
         ratings_csv: Path,
         ml_to_internal: dict[int, int],
+        *,
+        use_implicit: bool,
+        val_fraction: float,
+        seed: int,
     ) -> str:
+        source_hash = hashlib.sha256()
+        with ratings_csv.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                source_hash.update(chunk)
+
         payload = {
-            "size": ratings_csv.stat().st_size,
-            "mtime_ns": ratings_csv.stat().st_mtime_ns,
+            "source_sha256": source_hash.hexdigest(),
             "mapping": sorted(
                 (
                     int(key),
@@ -846,6 +936,9 @@ class NCFStreamingPreprocessor(
                 for key, value
                 in ml_to_internal.items()
             ),
+            "use_implicit": use_implicit,
+            "val_fraction": float(val_fraction),
+            "seed": int(seed),
         }
 
         return hashlib.sha256(
@@ -924,22 +1017,70 @@ class NCFStreamingPreprocessor(
     @staticmethod
     def _count_shard_rows(
         shards: list[Path],
+        *,
+        n_users: int,
+        n_items: int,
     ) -> int:
-        """Count stored rows from NPZ shards instead of trusting stale metadata."""
+        """Validate shard arrays and count their rows instead of trusting metadata."""
         total = 0
         for shard_path in shards:
             with np.load(shard_path, allow_pickle=False) as data:
-                lengths = (
-                    len(data["users"]),
-                    len(data["items"]),
-                    len(data["labels"]),
-                )
+                users = data["users"]
+                items = data["items"]
+                labels = data["labels"]
+                arrays = (users, items, labels)
+                if any(array.ndim != 1 for array in arrays):
+                    raise ValueError(
+                        f"NCF shard arrays must be one-dimensional: {shard_path}"
+                    )
+                lengths = tuple(len(array) for array in arrays)
             if len(set(lengths)) != 1:
                 raise ValueError(
                     f"Inconsistent array lengths in NCF shard: {shard_path}"
                 )
+            if not np.issubdtype(users.dtype, np.integer) or not np.issubdtype(
+                items.dtype, np.integer
+            ):
+                raise ValueError(
+                    f"NCF shard indices must be integers: {shard_path}"
+                )
+            if lengths[0] and (
+                users.min() < 0
+                or users.max() >= n_users
+                or items.min() < 0
+                or items.max() >= n_items
+            ):
+                raise ValueError(
+                    f"NCF shard index is outside the metadata maps: {shard_path}"
+                )
+            if not np.issubdtype(labels.dtype, np.number) or (
+                not np.isfinite(labels).all()
+                or (lengths[0] and (labels.min() < 0 or labels.max() > 1))
+            ):
+                raise ValueError(
+                    f"NCF shard labels must be finite values in [0, 1]: {shard_path}"
+                )
             total += lengths[0]
         return total
+
+    @staticmethod
+    def _has_contiguous_indices(mapping: object, count: object) -> bool:
+        if (
+            not isinstance(mapping, dict)
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+        ):
+            return False
+        indices = list(mapping.values())
+        if any(not isinstance(index, int) or isinstance(index, bool) for index in indices):
+            return False
+        expected_count = count
+        indices.sort()
+        return (
+            expected_count > 0
+            and len(mapping) == expected_count
+            and indices == list(range(expected_count))
+        )
 
     def _restore_metadata(
         self,
@@ -976,33 +1117,6 @@ class NCFStreamingPreprocessor(
         )
 
         self._is_fitted = True
-
-    @staticmethod
-    def _clear_output(
-        output_dir: Path,
-    ) -> None:
-        for pattern in (
-            "train_*.npz",
-            "val_*.npz",
-        ):
-            for path in output_dir.glob(
-                pattern
-            ):
-                try:
-                    path.unlink()
-                except OSError:
-                    pass
-
-        metadata = (
-            output_dir
-            / "metadata.json"
-        )
-
-        try:
-            metadata.unlink()
-        except OSError:
-            pass
-
 
 class NCFStreamingTrainer:
     """Train NCF directly from streaming datasets."""
@@ -1079,30 +1193,11 @@ class NCFStreamingTrainer:
                     set_to_none=True
                 )
 
-                # BatchNorm cannot estimate batch statistics from a singleton.
-                # Keep the final row and temporarily use its running statistics.
-                batch_norm_states = []
-                if user_batch.shape[0] == 1:
-                    for module in model.modules():
-                        if isinstance(
-                            module,
-                            nn.modules.batchnorm._BatchNorm,
-                        ):
-                            batch_norm_states.append(
-                                (module, module.training)
-                            )
-                            module.eval()
-
-                try:
+                with singleton_batchnorm_eval(model, user_batch.shape[0]):
                     predictions = model(
                         user_batch,
                         item_batch,
                     )
-                finally:
-                    # Restore only these BatchNorm modules; keep the model's
-                    # other layers in the training mode set by model.train().
-                    for module, was_training in batch_norm_states:
-                        module.training = was_training
 
                 loss = criterion(
                     predictions,

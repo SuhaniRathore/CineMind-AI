@@ -167,6 +167,11 @@ class TestRecommendations:
         assert seed_movies["B"] in rec_movie_ids
 
         # Verify persistence and reason_text=None
+        assert {
+            recommendation["algorithm"]
+            for recommendation in data["recommendations"]
+        } == {"content_based"}
+
         from app.db.database import get_db
         generator = client.app.dependency_overrides[get_db]()
         db = next(generator)
@@ -195,6 +200,37 @@ class TestRecommendations:
         assert resp.status_code == 200
         # Should return 0 since there are no HIGH ratings (>=7)
         assert resp.json()["total"] == 0
+
+    def test_popularity_fallback_is_not_labeled_content_based(
+        self,
+        client: TestClient,
+        auth_header: dict[str, str],
+        seed_movies: dict[str, int],
+    ):
+        from app.db.database import get_db
+
+        generator = client.app.dependency_overrides[get_db]()
+        db = next(generator)
+        for index, movie_id in enumerate(seed_movies.values(), start=1):
+            movie = db.get(Movie, movie_id)
+            movie.popularity = float(index)
+        db.commit()
+        try:
+            next(generator)
+        except StopIteration:
+            pass
+
+        response = client.get(
+            "/api/v1/recommendations",
+            headers=auth_header,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["total"] == len(seed_movies)
+        assert {
+            recommendation["algorithm"]
+            for recommendation in response.json()["recommendations"]
+        } == {"popularity_based"}
 
 
     def test_deep_collab_uses_ncf_artifact(self, monkeypatch, client, auth_header):
@@ -257,3 +293,87 @@ class TestRecommendations:
         assert captured["model"] == "fake_model"
         assert captured["preprocessor"] == "fake_preprocessor"
         assert isinstance(captured["collab_model"], FakeAdapter)
+
+    def test_deep_collab_request_runs_ncf_for_mapped_rated_user(
+        self,
+        monkeypatch,
+        client,
+        auth_header,
+        seed_movies,
+    ):
+        from app.api.routes import recommendations as recommendations_route
+        from app.core.config import get_settings
+        from app.db.database import get_db
+        from app.ml.ncf_data import NCFDataPreprocessor
+        from app.ml.ncf_model import NCFModel
+
+        settings = _test_settings()
+        settings.use_deep_collab = True
+        settings.collab_min_ratings = 3
+        client.app.dependency_overrides[get_settings] = lambda: settings
+
+        generator = client.app.dependency_overrides[get_db]()
+        db = next(generator)
+        user = db.query(User).filter(User.email == "recuser@example.com").first()
+        user_id = user.id
+        try:
+            next(generator)
+        except StopIteration:
+            pass
+
+        for movie_key, rating in (("A", 9), ("B", 8), ("C", 6)):
+            response = client.post(
+                "/api/v1/ratings",
+                json={"movie_id": seed_movies[movie_key], "rating": rating},
+                headers=auth_header,
+            )
+            assert response.status_code == 201
+
+        movie_to_idx = {
+            movie_id: index
+            for index, movie_id in enumerate(seed_movies.values())
+        }
+        preprocessor = NCFDataPreprocessor()
+        preprocessor.user_to_idx = {f"app_{user_id}": 0}
+        preprocessor.movie_to_idx = movie_to_idx
+        preprocessor.idx_to_movie = {
+            index: movie_id
+            for movie_id, index in movie_to_idx.items()
+        }
+        preprocessor.n_users = 1
+        preprocessor.n_items = len(movie_to_idx)
+        preprocessor._is_fitted = True
+        model = NCFModel(
+            n_users=1,
+            n_items=len(movie_to_idx),
+            gmf_dim=8,
+            mlp_layers=[16, 8],
+            dropout=0.0,
+        )
+
+        class FakeStore:
+            def load_ncf(self, name):
+                assert name == "collaborative_ncf"
+                return model, preprocessor
+
+            def load(self, name):
+                raise AssertionError(
+                    "SVD artifact should not be loaded when NCF is enabled"
+                )
+
+        monkeypatch.setattr(
+            recommendations_route,
+            "ModelStore",
+            lambda _settings: FakeStore(),
+        )
+
+        response = client.get(
+            "/api/v1/recommendations",
+            headers=auth_header,
+        )
+
+        assert response.status_code == 200
+        recommendations = response.json()["recommendations"]
+        assert len(recommendations) == 1
+        assert recommendations[0]["movie_id"] == seed_movies["D"]
+        assert recommendations[0]["algorithm"] == "hybrid"

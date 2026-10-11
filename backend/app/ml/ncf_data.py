@@ -149,11 +149,7 @@ class NCFDataPreprocessor:
         df["item_idx"] = df["movie_id"].map(self.movie_to_idx)
 
         # Compute labels
-        if self.use_implicit:
-            df["label"] = (df["rating"] >= _IMPLICIT_POS_THRESHOLD).astype(float)
-        else:
-            # Normalise 1–10 rating to [0, 1] for MSE stability
-            df["label"] = (df["rating"] - 1.0) / 9.0
+        df["label"] = self._encode_rating_labels(df["rating"])
 
         # Stratified 90/10 split by user
         train_df, val_df = self._stratified_split(df)
@@ -183,12 +179,14 @@ class NCFDataPreprocessor:
         df["item_idx"] = df["movie_id"].map(self.movie_to_idx)
         df = df.dropna(subset=["user_idx", "item_idx"])
 
-        if self.use_implicit:
-            df["label"] = (df["rating"] >= _IMPLICIT_POS_THRESHOLD).astype(float)
-        else:
-            df["label"] = (df["rating"] - 1.0) / 9.0
+        df["label"] = self._encode_rating_labels(df["rating"])
 
         return self._to_dataset(df)
+
+    def _encode_rating_labels(self, ratings: pd.Series) -> pd.Series:
+        if self.use_implicit:
+            return (ratings >= _IMPLICIT_POS_THRESHOLD).astype(float)
+        return (ratings - 1.0) / 9.0
 
     def get_all_item_indices(self) -> list[int]:
         """Return all 0-based item indices (useful for batch inference)."""

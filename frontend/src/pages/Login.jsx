@@ -67,7 +67,7 @@ const Login = () => {
           </form>
           
           <p className="text-center mt-8 text-muted" style={{textAlign: 'center', marginTop: '2rem'}}>
-            Don't have an account? <Link to="/register">Register here</Link>
+            Don&apos;t have an account? <Link to="/register">Register here</Link>
           </p>
         </div>
       </div>
