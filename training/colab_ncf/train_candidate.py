@@ -48,12 +48,17 @@ def require_gpu() -> torch.device:
     return torch.device("cuda")
 
 
-def extract_bundle(bundle_path: str | Path, destination: str | Path) -> Path:
+def extract_bundle(
+    bundle_path: str | Path,
+    destination: str | Path,
+    *,
+    exist_ok: bool = False,
+) -> Path:
     bundle_path = Path(bundle_path)
     destination = Path(destination)
-    if destination.exists():
+    if destination.exists() and not exist_ok:
         raise FileExistsError(f"Refusing to overwrite extracted bundle directory: {destination}")
-    destination.mkdir(parents=True)
+    destination.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(bundle_path) as archive:
         bad_entry = archive.testzip()
         if bad_entry is not None:
