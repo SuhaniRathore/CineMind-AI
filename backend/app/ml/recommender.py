@@ -1,9 +1,8 @@
-
 """
 Content-based recommendation engine (Milestone 8, fixed at Milestone 12).
 
-Uses scikit-learn TfidfVectorizer and cosine_similarity to find movies similar
-to a user's highly-rated movies based on genres and metadata.
+Uses scikit-learn TfidfVectorizer and cosine_similarity to find movies
+similar to a user's highly-rated movies based on genres and metadata.
 
 Cold-start fallback:
   - Users with no ratings receive popular-movie recommendations.
@@ -13,6 +12,7 @@ Cold-start fallback:
 
 Performance:
   - Loads preferred movies and unrated candidates separately.
+  - Uses selectinload to batch-load movie genres and avoid N+1 queries.
   - Uses SQLAlchemy yield_per to process candidates in batches.
 """
 
@@ -20,7 +20,7 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.movie import Movie
 from app.models.recommendation import (
@@ -101,6 +101,7 @@ def generate_recommendations_with_source(
     Users without useful rating signals receive popular-movie recommendations
     instead of an empty result, provided popularity metadata is available.
     """
+
     def tagged(
         recommendations: list[tuple[int, float]],
         algorithm: str,
@@ -150,11 +151,11 @@ def generate_recommendations_with_source(
         for rating in highly_rated
     }
 
-    # 2. Fetch preferred movies and unrated candidates separately.
+    # 2. Load preferred movies and their genres in batches.
     preferred_movies = db.scalars(
-        select(Movie).where(
-            Movie.id.in_(preferred_movie_ids)
-        )
+        select(Movie)
+        .options(selectinload(Movie.genres))
+        .where(Movie.id.in_(preferred_movie_ids))
     ).all()
 
     # Defensive fallback if rated movie records are unavailable.
@@ -169,8 +170,10 @@ def generate_recommendations_with_source(
         )
 
     # Candidate movies: those the user has not rated.
+    # selectinload batches genre loading instead of querying genres per movie.
     candidate_query = (
         select(Movie)
+        .options(selectinload(Movie.genres))
         .where(Movie.id.notin_(rated_movie_ids))
         .execution_options(yield_per=1000)
     )
@@ -219,9 +222,7 @@ def generate_recommendations_with_source(
     vectorizer = TfidfVectorizer()
 
     try:
-        tfidf_matrix = vectorizer.fit_transform(
-            metadata_corpus
-        )
+        tfidf_matrix = vectorizer.fit_transform(metadata_corpus)
     except ValueError:
         return tagged(
             _popular_fallback(
