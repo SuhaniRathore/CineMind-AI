@@ -9,7 +9,7 @@ The application combines a React frontend, FastAPI backend, PostgreSQL database,
 - React frontend and FastAPI backend run locally through Docker Compose.
 - Login/authentication and the PostgreSQL connection have been verified.
 - The recommendation API returned 10 movies in a local smoke test.
-- Backend tests: **166 passed** with 2 existing Pydantic deprecation warnings in the verified run; environment-dependent TMDB key checks are skipped when no key is configured.
+- Backend tests: **167 passed** with zero warnings; environment-dependent TMDB key checks are skipped when no key is configured.
 - Frontend ESLint and production build both pass.
 - Docker Compose services: API, web frontend, and database.
 
